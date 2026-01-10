@@ -1,0 +1,63 @@
+# subtitle-forge default configuration
+
+whisper:
+  # Whisper model name
+  # Options: tiny, base, small, medium, large-v2, large-v3, distil-large-v3
+  model: large-v3
+
+  # Device: cuda or cpu
+  device: cuda
+
+  # Compute precision: float16, int8_float16, int8
+  # float16: faster, requires more VRAM
+  # int8_float16: balanced
+  # int8: less VRAM, slightly slower
+  compute_type: float16
+
+  # Beam search size
+  beam_size: 5
+
+  # Voice Activity Detection filter
+  vad_filter: true
+
+  # Batch size (uses BatchedInferencePipeline)
+  # Set to null for standard inference
+  batch_size: null
+
+ollama:
+  # Ollama model name
+  model: qwen2.5:14b
+
+  # Ollama API address
+  host: http://localhost:11434
+
+  # Generation temperature (0-1, lower = more deterministic)
+  temperature: 0.3
+
+  # Subtitles per translation batch
+  max_batch_size: 10
+
+  # Maximum retry attempts
+  max_retries: 3
+
+output:
+  # Output file encoding
+  encoding: utf-8
+
+  # Keep original language subtitles
+  keep_original: true
+
+  # Generate bilingual subtitles
+  bilingual: false
+
+  # Original text on top in bilingual mode
+  original_on_top: true
+
+# Maximum concurrent workers for batch processing
+max_workers: 2
+
+# Log level: DEBUG, INFO, WARNING, ERROR
+log_level: INFO
+
+# Log file path (null = no file logging)
+log_file: null
