@@ -1,0 +1,255 @@
+"""CLI main application."""
+
+from pathlib import Path
+from typing import Optional, List
+
+import typer
+from rich.console import Console
+
+from .commands import transcribe, translate, batch, config
+from ..models.config import AppConfig
+from ..utils.logger import setup_logging
+
+app = typer.Typer(
+    name="subtitle-forge",
+    help="Local video subtitle generation and translation tool",
+    add_completion=True,
+    no_args_is_help=True,
+)
+
+console = Console()
+
+# Register subcommands
+app.add_typer(transcribe.app, name="transcribe", help="Transcribe video to subtitles")
+app.add_typer(translate.app, name="translate", help="Translate existing subtitles")
+app.add_typer(batch.app, name="batch", help="Batch process multiple videos")
+app.add_typer(config.app, name="config", help="Configuration management")
+
+# Global config
+_config: Optional[AppConfig] = None
+
+
+def get_config() -> AppConfig:
+    """Get current configuration."""
+    global _config
+    if _config is None:
+        _config = AppConfig.load()
+    return _config
+
+
+@app.callback()
+def main(
+    ctx: typer.Context,
+    config_file: Optional[Path] = typer.Option(
+        None,
+        "--config",
+        "-c",
+        help="Configuration file path",
+    ),
+    verbose: bool = typer.Option(
+        False,
+        "--verbose",
+        "-v",
+        help="Verbose output mode",
+    ),
+    quiet: bool = typer.Option(
+        False,
+        "--quiet",
+        "-q",
+        help="Quiet mode, only show errors",
+    ),
+    log_file: Optional[Path] = typer.Option(
+        None,
+        "--log-file",
+        help="Log file path",
+    ),
+    no_progress: bool = typer.Option(
+        False,
+        "--no-progress",
+        help="Disable progress bar",
+    ),
+):
+    """subtitle-forge - Local video subtitle generation and translation tool"""
+    global _config
+
+    # Load configuration
+    if config_file:
+        _config = AppConfig.load(config_file)
+    else:
+        _config = get_config()
+
+    # Setup logging
+    log_level = "DEBUG" if verbose else ("ERROR" if quiet else _config.log_level)
+    setup_logging(log_level, str(log_file) if log_file else _config.log_file)
+
+    # Store in context
+    ctx.ensure_object(dict)
+    ctx.obj["config"] = _config
+    ctx.obj["no_progress"] = no_progress
+
+
+@app.command()
+def process(
+    video: Path = typer.Argument(..., help="Video file path", exists=True),
+    target_lang: List[str] = typer.Option(
+        ...,
+        "--target-lang",
+        "-t",
+        help="Target language(s) (can be specified multiple times)",
+    ),
+    source_lang: Optional[str] = typer.Option(
+        None,
+        "--source-lang",
+        "-s",
+        help="Source language (auto-detect if not specified)",
+    ),
+    output_dir: Optional[Path] = typer.Option(
+        None,
+        "--output-dir",
+        "-o",
+        help="Output directory",
+    ),
+    whisper_model: Optional[str] = typer.Option(
+        None,
+        "--whisper-model",
+        help="Whisper model name",
+    ),
+    ollama_model: Optional[str] = typer.Option(
+        None,
+        "--ollama-model",
+        help="Ollama model name",
+    ),
+    keep_original: bool = typer.Option(
+        True,
+        "--keep-original/--no-keep-original",
+        help="Keep original language subtitles",
+    ),
+    bilingual: bool = typer.Option(
+        False,
+        "--bilingual",
+        help="Generate bilingual subtitles",
+    ),
+):
+    """
+    Process a video: extract audio -> transcribe -> translate -> save subtitles
+
+    Example:
+        subtitle-forge process video.mp4 --target-lang zh
+        subtitle-forge process video.mp4 -t zh -t ja --bilingual
+    """
+    from ..core.audio import AudioExtractor
+    from ..core.transcriber import Transcriber
+    from ..core.translator import SubtitleTranslator, TranslationConfig
+    from ..core.subtitle import SubtitleProcessor
+    from ..utils.progress import SubtitleProgress, print_success, print_error, print_info
+
+    cfg = get_config()
+
+    # Override config if specified
+    if whisper_model:
+        cfg.whisper.model = whisper_model
+    if ollama_model:
+        cfg.ollama.model = ollama_model
+
+    output_dir = output_dir or video.parent
+    progress = SubtitleProgress()
+
+    try:
+        with progress.track_video(video.name) as tracker:
+            # 1. Extract audio
+            tracker.set_description(f"[1/4] Extracting audio: {video.name}")
+            extractor = AudioExtractor()
+            audio_path = extractor.extract(video)
+            tracker.update("[1/4] Audio extraction complete")
+
+            # 2. Transcribe
+            tracker.set_description(f"[2/4] Transcribing: {video.name}")
+            transcriber = Transcriber(
+                model_name=cfg.whisper.model,
+                device=cfg.whisper.device,
+                compute_type=cfg.whisper.compute_type,
+            )
+            segments, info = transcriber.transcribe(
+                audio_path,
+                language=source_lang,
+                beam_size=cfg.whisper.beam_size,
+                vad_filter=cfg.whisper.vad_filter,
+            )
+            detected_lang = info.language
+            tracker.update("[2/4] Transcription complete")
+
+            # 3. Save original subtitles
+            subtitle_processor = SubtitleProcessor()
+            if keep_original:
+                original_srt = output_dir / f"{video.stem}.{detected_lang}.srt"
+                subtitle_processor.save(segments, original_srt)
+                print_info(f"Original subtitles saved: {original_srt}")
+
+            # 4. Translate
+            tracker.set_description(f"[3/4] Translating: {video.name}")
+            translator = SubtitleTranslator(
+                TranslationConfig(
+                    model=cfg.ollama.model,
+                    host=cfg.ollama.host,
+                    temperature=cfg.ollama.temperature,
+                    max_batch_size=cfg.ollama.max_batch_size,
+                )
+            )
+
+            for lang in target_lang:
+                if lang == detected_lang:
+                    print_info(f"Skipping translation to {lang} (same as source)")
+                    continue
+
+                translated = translator.translate(
+                    segments,
+                    detected_lang,
+                    lang,
+                )
+
+                if bilingual:
+                    merged = subtitle_processor.merge_bilingual(segments, translated)
+                    output_path = output_dir / f"{video.stem}.{detected_lang}-{lang}.srt"
+                    subtitle_processor.save(merged, output_path)
+                else:
+                    output_path = output_dir / f"{video.stem}.{lang}.srt"
+                    subtitle_processor.save(translated, output_path)
+
+                print_info(f"Translated subtitles saved: {output_path}")
+
+            tracker.update("[3/4] Translation complete")
+
+            # 5. Cleanup
+            tracker.set_description("[4/4] Cleaning up")
+            audio_path.unlink(missing_ok=True)
+            transcriber.unload_model()
+            tracker.update("[4/4] Complete")
+
+        print_success(
+            f"Processing complete!\n"
+            f"  Video: {video.name}\n"
+            f"  Detected language: {detected_lang} ({info.language_probability:.1%})\n"
+            f"  Segments: {len(segments)}\n"
+            f"  Output directory: {output_dir}"
+        )
+
+    except Exception as e:
+        print_error(str(e))
+        raise typer.Exit(1)
+
+
+@app.command()
+def version():
+    """Show version information."""
+    from .. import __version__
+
+    console.print(f"subtitle-forge version {__version__}")
+
+
+def cli():
+    """Entry point."""
+    app()
+
+
+if __name__ == "__main__":
+    cli()
