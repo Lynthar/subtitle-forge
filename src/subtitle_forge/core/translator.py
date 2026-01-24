@@ -10,6 +10,7 @@ from ollama import Client, ResponseError
 
 from ..models.subtitle import SubtitleSegment
 from ..exceptions import TranslationError
+from .model_manager import OllamaModelManager, DownloadProgress
 
 logger = logging.getLogger(__name__)
 
@@ -48,6 +49,7 @@ class SubtitleTranslator:
     def __init__(self, config: Optional[TranslationConfig] = None):
         self.config = config or TranslationConfig()
         self._client: Optional[Client] = None
+        self._model_manager: Optional[OllamaModelManager] = None
 
     @property
     def client(self) -> Client:
@@ -55,26 +57,41 @@ class SubtitleTranslator:
             self._client = Client(host=self.config.host)
         return self._client
 
+    @property
+    def model_manager(self) -> OllamaModelManager:
+        """Get or create model manager instance."""
+        if self._model_manager is None:
+            self._model_manager = OllamaModelManager(host=self.config.host)
+        return self._model_manager
+
+    def ensure_model_ready(
+        self,
+        progress_callback: Optional[Callable[[DownloadProgress], None]] = None,
+        auto_pull: bool = True,
+    ) -> bool:
+        """
+        Ensure the translation model is ready, optionally downloading it.
+
+        Args:
+            progress_callback: Optional callback for download progress updates.
+            auto_pull: If True, automatically download missing model.
+
+        Returns:
+            True if model is ready to use.
+        """
+        return self.model_manager.ensure_model(
+            self.config.model,
+            progress_callback=progress_callback,
+            auto_pull=auto_pull,
+        )
+
+    def check_connection(self) -> bool:
+        """Check if Ollama service is reachable."""
+        return self.model_manager.check_connection()
+
     def check_model_available(self) -> bool:
         """Check if Ollama model is available."""
-        try:
-            models = self.client.list()
-            available_models = [m["name"] for m in models.get("models", [])]
-
-            model_base = self.config.model.split(":")[0]
-            for available in available_models:
-                if self.config.model == available or model_base in available:
-                    return True
-
-            logger.warning(
-                f"Model {self.config.model} not available. "
-                f"Available models: {', '.join(available_models)}"
-            )
-            return False
-
-        except Exception as e:
-            logger.error(f"Cannot connect to Ollama: {e}")
-            return False
+        return self.model_manager.is_model_available(self.config.model)
 
     def _build_translation_prompt(
         self,
