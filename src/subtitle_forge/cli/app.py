@@ -141,7 +141,15 @@ def process(
     from ..core.transcriber import Transcriber
     from ..core.translator import SubtitleTranslator, TranslationConfig
     from ..core.subtitle import SubtitleProcessor
-    from ..utils.progress import SubtitleProgress, print_success, print_error, print_info
+    from ..utils.progress import (
+        SubtitleProgress,
+        TranslationProgressTracker,
+        print_success,
+        print_error,
+        print_info,
+        print_warning,
+        print_translation_explainer,
+    )
 
     cfg = get_config()
 
@@ -186,7 +194,7 @@ def process(
                 print_info(f"Original subtitles saved: {original_srt}")
 
             # 4. Translate
-            tracker.set_description(f"[3/4] Translating: {video.name}")
+            tracker.set_description(f"[3/4] Preparing translation: {video.name}")
             translator = SubtitleTranslator(
                 TranslationConfig(
                     model=cfg.ollama.model,
@@ -196,16 +204,64 @@ def process(
                 )
             )
 
+            # Check if translation model is available
+            if not translator.check_model_available():
+                print_warning(f"Translation model '{cfg.ollama.model}' not found")
+                if typer.confirm("Download model now?", default=True):
+                    from rich.progress import Progress, SpinnerColumn, BarColumn, TextColumn, DownloadColumn
+
+                    console.print(f"\n[cyan]Downloading model: {cfg.ollama.model}[/cyan]")
+                    console.print("[dim]This may take a while for large models...[/dim]\n")
+
+                    with Progress(
+                        SpinnerColumn(),
+                        TextColumn("[bold blue]{task.description}"),
+                        BarColumn(bar_width=40),
+                        TextColumn("[progress.percentage]{task.percentage:>3.1f}%"),
+                        DownloadColumn(),
+                        console=console,
+                    ) as dl_progress:
+                        dl_task = dl_progress.add_task("Downloading...", total=None)
+
+                        def update_download(dp):
+                            if dp.total_bytes > 0:
+                                dl_progress.update(
+                                    dl_task,
+                                    total=dp.total_bytes,
+                                    completed=dp.completed_bytes,
+                                    description=dp.status.replace("_", " ").capitalize(),
+                                )
+
+                        translator.ensure_model_ready(progress_callback=update_download)
+
+                    print_info("Model downloaded successfully!")
+                else:
+                    print_error("Translation requires the configured model. Run: subtitle-forge config pull-model")
+                    raise typer.Exit(1)
+
+            # Show explanation for first-time users
+            print_translation_explainer()
+
             for lang in target_lang:
                 if lang == detected_lang:
                     print_info(f"Skipping translation to {lang} (same as source)")
                     continue
 
-                translated = translator.translate(
-                    segments,
-                    detected_lang,
-                    lang,
-                )
+                lang_name = translator.LANGUAGE_NAMES.get(lang, lang)
+                print_info(f"Translating to {lang_name}...")
+
+                # Use enhanced translation progress tracker
+                with TranslationProgressTracker(
+                    total_segments=len(segments),
+                    batch_size=cfg.ollama.max_batch_size,
+                    target_lang=lang_name,
+                ) as trans_progress:
+                    translated = translator.translate(
+                        segments,
+                        detected_lang,
+                        lang,
+                        progress_callback=trans_progress.update,
+                    )
 
                 if bilingual:
                     merged = subtitle_processor.merge_bilingual(segments, translated)
@@ -236,6 +292,24 @@ def process(
     except Exception as e:
         print_error(str(e))
         raise typer.Exit(1)
+
+
+@app.command()
+def quickstart():
+    """
+    Interactive first-time setup wizard.
+
+    Guides you through:
+    - Checking system requirements (ffmpeg, GPU)
+    - Verifying Ollama is running
+    - Downloading the translation model
+
+    Example:
+        subtitle-forge quickstart
+    """
+    from ..utils.setup_wizard import run_setup_wizard
+
+    run_setup_wizard()
 
 
 @app.command()

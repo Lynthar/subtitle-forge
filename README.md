@@ -1,128 +1,155 @@
 # subtitle-forge
 
-Local video subtitle generation and translation CLI tool.
+Generate and translate video subtitles locally using AI - no cloud services required.
 
-## Features
+## Quick Start (5 minutes)
 
-- **Local Processing**: All processing runs locally, no cloud services required
-- **Speech Recognition**: Uses faster-whisper with CUDA acceleration for fast, accurate transcription
-- **Multi-language Translation**: Translates to any language using Ollama local LLM
-- **Batch Processing**: Process multiple videos with configurable concurrency
-- **User-friendly CLI**: Rich progress display and helpful prompts
-
-## Requirements
-
-- Python 3.9+
-- NVIDIA GPU with CUDA support (recommended) or CPU
-- ffmpeg
-- Ollama (for translation)
-
-## Installation
+### 1. Install subtitle-forge
 
 ```bash
-# Clone the repository
-git clone https://github.com/yourusername/subtitle-forge.git
-cd subtitle-forge
-
-# Install the package
 pip install -e .
-
-# Or install with development dependencies
-pip install -e ".[dev]"
 ```
 
-### System Dependencies
+### 2. Install System Dependencies
 
+**macOS:**
 ```bash
-# Install ffmpeg (macOS)
 brew install ffmpeg
+brew install ollama
+ollama serve  # Keep this running in a separate terminal
+```
 
-# Install ffmpeg (Ubuntu/Debian)
+**Ubuntu/Debian:**
+```bash
 sudo apt install ffmpeg
-
-# Install and start Ollama
-# See: https://ollama.ai/download
-ollama serve
-
-# Pull a translation model
-ollama pull qwen2.5:14b
+curl -fsSL https://ollama.ai/install.sh | sh
+ollama serve  # Keep this running in a separate terminal
 ```
 
-## Usage
+**Windows:**
+```bash
+# Install ffmpeg from https://ffmpeg.org/download.html
+# Install Ollama from https://ollama.ai/download
+ollama serve  # Keep this running in a separate terminal
+```
 
-### Process a Single Video
+### 3. Run Setup Wizard
 
 ```bash
-# Basic usage - transcribe and translate
-subtitle-forge process video.mp4 --target-lang zh
+subtitle-forge quickstart
+```
 
-# Multiple target languages
+This interactive wizard will:
+- Check your system requirements
+- Download the AI translation model (~8GB, one-time)
+- Verify everything is working
+
+### 4. Generate Your First Subtitles
+
+```bash
+subtitle-forge process your-video.mp4 --target-lang zh
+```
+
+---
+
+## Common Use Cases
+
+### Generate subtitles in one language
+```bash
+subtitle-forge process video.mp4 -t zh        # Chinese
+subtitle-forge process video.mp4 -t ja        # Japanese
+subtitle-forge process video.mp4 -t ko        # Korean
+subtitle-forge process video.mp4 -t en        # English
+```
+
+### Generate subtitles in multiple languages
+```bash
 subtitle-forge process video.mp4 -t zh -t ja -t ko
+```
 
-# Keep original and generate bilingual subtitles
+### Create bilingual subtitles (original + translation)
+```bash
 subtitle-forge process video.mp4 -t zh --bilingual
-
-# Specify output directory
-subtitle-forge process video.mp4 -t zh -o ./subtitles/
 ```
 
-### Transcribe Only (No Translation)
-
+### Process multiple videos at once
 ```bash
-# Basic transcription
+subtitle-forge batch ./my-videos/ -t zh
+subtitle-forge batch ./my-videos/ -t zh --recursive  # Include subfolders
+subtitle-forge batch --file-list videos.txt -t zh    # From a file list
+```
+
+### Transcribe only (no translation)
+```bash
 subtitle-forge transcribe video.mp4
-
-# Specify source language
-subtitle-forge transcribe video.mp4 --language en
-
-# Auto-select model based on GPU VRAM
-subtitle-forge transcribe video.mp4 --auto-model
+subtitle-forge transcribe video.mp4 --language en    # Specify source language
+subtitle-forge transcribe video.mp4 --auto-model     # Auto-select best model
 ```
 
-### Translate Existing Subtitles
-
+### Translate existing subtitles
 ```bash
-# Translate SRT file
-subtitle-forge translate video.en.srt --target-lang zh
-
-# Generate bilingual subtitles
-subtitle-forge translate video.en.srt -t zh --bilingual
+subtitle-forge translate video.en.srt -t zh
+subtitle-forge translate video.srt -s en -t zh --bilingual
 ```
 
-### Batch Processing
+---
 
+## Troubleshooting
+
+### "Cannot connect to Ollama"
+
+Ollama is the AI engine that powers translation. Make sure it's running:
 ```bash
-# Process all videos in a directory
-subtitle-forge batch ./videos/ --target-lang zh
-
-# Recursive search with multiple workers
-subtitle-forge batch ./videos/ -t zh --recursive --workers 2
-
-# Process from file list
-subtitle-forge batch --file-list videos.txt -t zh
+ollama serve
 ```
 
-### Configuration
+### "Model not found" or download keeps failing
 
+Download the translation model manually (supports resume if interrupted):
 ```bash
-# Show current configuration
+subtitle-forge config pull-model
+```
+
+If download fails, just run the command again - it will resume from where it stopped.
+
+### "Translation is very slow"
+
+- **With GPU**: ~10-20 subtitles per second
+- **Without GPU**: 5-10x slower
+
+Check your GPU status:
+```bash
+subtitle-forge config check
+```
+
+### Full system diagnostic
+```bash
+subtitle-forge config check --verbose
+```
+
+---
+
+## Configuration
+
+### View current settings
+```bash
 subtitle-forge config show
+```
 
-# Set configuration values
+### Change settings
+```bash
 subtitle-forge config set whisper.model large-v3
 subtitle-forge config set ollama.model qwen2.5:32b
 subtitle-forge config set max_workers 4
+```
 
-# Check system status
-subtitle-forge config check
-
-# Reset to defaults
+### Reset to defaults
+```bash
 subtitle-forge config reset
 ```
 
-## Configuration File
-
-Configuration is stored at `~/.config/subtitle-forge/config.yaml`:
+### Configuration file location
+`~/.config/subtitle-forge/config.yaml`
 
 ```yaml
 whisper:
@@ -147,19 +174,26 @@ max_workers: 2
 log_level: INFO
 ```
 
+---
+
 ## Supported Languages
 
-The tool supports all languages recognized by Whisper (99+ languages) and can translate to any language supported by the Ollama model.
+The tool supports all languages recognized by Whisper (99+ languages) and can translate to any language supported by Ollama.
 
-Common language codes:
-- `en` - English
-- `zh` - Chinese (Simplified)
-- `zh-TW` - Chinese (Traditional)
-- `ja` - Japanese
-- `ko` - Korean
-- `es` - Spanish
-- `fr` - French
-- `de` - German
+| Code | Language |
+|------|----------|
+| `en` | English |
+| `zh` | Chinese (Simplified) |
+| `zh-TW` | Chinese (Traditional) |
+| `ja` | Japanese |
+| `ko` | Korean |
+| `es` | Spanish |
+| `fr` | French |
+| `de` | German |
+| `ru` | Russian |
+| `pt` | Portuguese |
+
+---
 
 ## Whisper Model Selection
 
@@ -171,7 +205,32 @@ Common language codes:
 | medium | ~5GB | Slower | High |
 | large-v3 | ~6GB | Slowest | Highest |
 
-Use `--auto-model` to automatically select the best model for your GPU.
+Use `--auto-model` to automatically select the best model for your GPU:
+```bash
+subtitle-forge transcribe video.mp4 --auto-model
+```
+
+---
+
+## Features
+
+- **100% Local Processing**: All processing runs on your computer, no cloud services
+- **Speech Recognition**: Uses faster-whisper with CUDA acceleration
+- **AI Translation**: Uses Ollama with local LLM models
+- **Batch Processing**: Process multiple videos with configurable concurrency
+- **Resume Support**: Model downloads can be resumed if interrupted
+- **User-friendly CLI**: Rich progress display and interactive setup
+
+---
+
+## Requirements
+
+- Python 3.9+
+- NVIDIA GPU with CUDA support (recommended) or CPU
+- ffmpeg
+- Ollama (for translation)
+
+---
 
 ## License
 

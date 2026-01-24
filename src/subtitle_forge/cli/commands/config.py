@@ -138,57 +138,142 @@ def reset():
 
 
 @app.command()
-def check():
-    """Check system status and dependencies."""
-    console.print(Panel("System Check", style="bold blue"))
+def check(
+    verbose: bool = typer.Option(
+        False,
+        "--verbose",
+        "-v",
+        help="Show detailed diagnostic information",
+    ),
+):
+    """
+    Check system status and dependencies.
 
-    # Check CUDA
-    if check_cuda_available():
-        gpu_info = get_gpu_info()
-        console.print("[green]CUDA:[/green] Available")
-        console.print(f"  GPU: {gpu_info.get('device_name', 'Unknown')}")
-        console.print(f"  VRAM: {gpu_info.get('total_vram_mb', 0)}MB total")
-        console.print(f"  Available: {gpu_info.get('available_vram_mb', 0)}MB")
-    else:
-        console.print("[yellow]CUDA:[/yellow] Not available (will use CPU)")
-
-    # Check ffmpeg
+    Example:
+        subtitle-forge config check
+        subtitle-forge config check --verbose
+    """
     import shutil
 
-    if shutil.which("ffmpeg"):
-        console.print("[green]ffmpeg:[/green] Found")
+    console.print(Panel("System Diagnostics", style="bold blue"))
+
+    issues = []
+    config = AppConfig.load()
+
+    # Check CUDA
+    console.print("\n[bold]GPU Status:[/bold]")
+    if check_cuda_available():
+        gpu_info = get_gpu_info()
+        console.print(f"  [green]CUDA:[/green] Available")
+        console.print(f"    GPU: {gpu_info.get('device_name', 'Unknown')}")
+        console.print(f"    VRAM Total: {gpu_info.get('total_vram_mb', 0)}MB")
+        console.print(f"    VRAM Available: {gpu_info.get('available_vram_mb', 0)}MB")
+
+        if verbose:
+            try:
+                import torch
+                console.print(f"    PyTorch Version: {torch.__version__}")
+                console.print(f"    CUDA Version: {torch.version.cuda}")
+            except ImportError:
+                pass
     else:
-        console.print("[red]ffmpeg:[/red] Not found - please install ffmpeg")
+        console.print("  [yellow]CUDA:[/yellow] Not available")
+        console.print("    Transcription will use CPU (slower)")
+
+        if verbose:
+            console.print("    [dim]To enable GPU acceleration, install CUDA and PyTorch with CUDA support[/dim]")
+
+    # Check ffmpeg
+    console.print("\n[bold]FFmpeg Status:[/bold]")
+    ffmpeg_path = shutil.which("ffmpeg")
+    if ffmpeg_path:
+        console.print(f"  [green]ffmpeg:[/green] Found")
+        if verbose:
+            console.print(f"    Path: {ffmpeg_path}")
+            import subprocess
+            try:
+                result = subprocess.run(["ffmpeg", "-version"], capture_output=True, text=True)
+                version_line = result.stdout.split('\n')[0] if result.stdout else "Unknown"
+                console.print(f"    Version: {version_line}")
+            except Exception:
+                pass
+    else:
+        console.print("  [red]ffmpeg:[/red] Not found")
+        console.print("    [yellow]Install ffmpeg:[/yellow]")
+        console.print("      macOS:   brew install ffmpeg")
+        console.print("      Ubuntu:  sudo apt install ffmpeg")
+        console.print("      Windows: choco install ffmpeg")
+        issues.append("ffmpeg not installed")
 
     # Check Ollama
+    console.print("\n[bold]Ollama Status:[/bold]")
     try:
-        from ...core.translator import SubtitleTranslator, TranslationConfig
+        from ...core.model_manager import OllamaModelManager
 
-        config = AppConfig.load()
-        translator = SubtitleTranslator(
-            TranslationConfig(
-                model=config.ollama.model,
-                host=config.ollama.host,
-            )
-        )
+        manager = OllamaModelManager(host=config.ollama.host)
 
-        if translator.check_model_available():
-            console.print(f"[green]Ollama:[/green] Connected, model {config.ollama.model} available")
+        if manager.check_connection():
+            console.print(f"  [green]Connection:[/green] OK")
+            console.print(f"    Host: {config.ollama.host}")
+
+            if verbose:
+                available_models = manager.list_models()
+                console.print(f"    Available models: {', '.join(available_models) if available_models else 'None'}")
+
+            # Check configured model
+            if manager.is_model_available(config.ollama.model):
+                console.print(f"  [green]Model:[/green] {config.ollama.model} (ready)")
+            else:
+                console.print(f"  [yellow]Model:[/yellow] {config.ollama.model} (not downloaded)")
+                console.print(f"    [yellow]Download with:[/yellow] subtitle-forge config pull-model")
+                issues.append(f"Translation model '{config.ollama.model}' not downloaded")
         else:
-            console.print(
-                f"[yellow]Ollama:[/yellow] Connected, but model {config.ollama.model} not found"
-            )
-            console.print(f"  Run: ollama pull {config.ollama.model}")
+            console.print("  [red]Connection:[/red] Failed")
+            console.print(f"    Cannot connect to {config.ollama.host}")
+            console.print("    [yellow]Start Ollama with:[/yellow] ollama serve")
+            issues.append("Cannot connect to Ollama")
+
     except Exception as e:
-        console.print(f"[red]Ollama:[/red] Cannot connect ({e})")
-        console.print("  Make sure Ollama is running: ollama serve")
+        console.print(f"  [red]Error:[/red] {e}")
+        if verbose:
+            import traceback
+            console.print(f"    [dim]{traceback.format_exc()}[/dim]")
+        issues.append(f"Ollama error: {e}")
+
+    # Configuration summary
+    if verbose:
+        console.print("\n[bold]Current Configuration:[/bold]")
+        console.print(f"  Whisper Model: {config.whisper.model}")
+        console.print(f"  Whisper Device: {config.whisper.device}")
+        console.print(f"  Ollama Model: {config.ollama.model}")
+        console.print(f"  Max Workers: {config.max_workers}")
+        console.print(f"  Config Path: {AppConfig.get_config_path()}")
 
     # Recommended model based on VRAM
     if check_cuda_available():
         from ...core.transcriber import Transcriber
 
         recommended = Transcriber.select_optimal_model()
-        console.print(f"\nRecommended Whisper model: [cyan]{recommended}[/cyan]")
+        console.print(f"\n[bold]Recommendation:[/bold]")
+        console.print(f"  Whisper model: [cyan]{recommended}[/cyan] (based on available VRAM)")
+
+    # Summary
+    console.print()
+    if issues:
+        console.print(Panel(
+            "[yellow]Issues Found:[/yellow]\n\n" +
+            "\n".join(f"  - {issue}" for issue in issues) +
+            "\n\n[dim]Run 'subtitle-forge quickstart' for guided setup[/dim]",
+            title="Status",
+            border_style="yellow",
+        ))
+    else:
+        console.print(Panel(
+            "[green]All systems operational![/green]\n\n"
+            "Ready to process videos.",
+            title="Status",
+            border_style="green",
+        ))
 
 
 @app.command()
@@ -214,3 +299,87 @@ def import_config(
     config = AppConfig.load(input_file)
     config.save()
     print_success(f"Configuration imported from: {input_file}")
+
+
+@app.command("pull-model")
+def pull_model(
+    model: Optional[str] = typer.Option(
+        None,
+        "--model",
+        "-m",
+        help="Model to download (default: configured model)",
+    ),
+):
+    """
+    Download Ollama translation model with progress display.
+
+    Supports automatic resume - if download is interrupted,
+    simply run this command again to continue from where it left off.
+
+    Example:
+        subtitle-forge config pull-model
+        subtitle-forge config pull-model --model qwen2.5:32b
+    """
+    from rich.progress import Progress, SpinnerColumn, BarColumn, TextColumn, DownloadColumn
+
+    from ...core.model_manager import OllamaModelManager, format_bytes
+
+    config = AppConfig.load()
+    target_model = model or config.ollama.model
+
+    console.print(Panel(
+        f"[cyan]Model:[/cyan] {target_model}\n"
+        f"[cyan]Host:[/cyan] {config.ollama.host}",
+        title="Download Configuration",
+        border_style="blue",
+    ))
+
+    manager = OllamaModelManager(host=config.ollama.host)
+
+    # Check connection first
+    if not manager.check_connection():
+        print_error("Cannot connect to Ollama service")
+        console.print("\n[yellow]Please ensure Ollama is running:[/yellow]")
+        console.print("  ollama serve")
+        raise typer.Exit(1)
+
+    # Check if already available
+    if manager.is_model_available(target_model):
+        print_success(f"Model {target_model} is already downloaded and ready to use")
+        return
+
+    console.print(f"\n[cyan]Downloading model: {target_model}[/cyan]")
+    console.print("[dim]Tip: If interrupted, run this command again to resume download[/dim]\n")
+
+    try:
+        with Progress(
+            SpinnerColumn(),
+            TextColumn("[bold blue]{task.description}"),
+            BarColumn(bar_width=40),
+            TextColumn("[progress.percentage]{task.percentage:>3.1f}%"),
+            DownloadColumn(),
+            console=console,
+        ) as progress:
+            task = progress.add_task("Initializing...", total=None)
+
+            for dp in manager.pull_model(target_model):
+                if dp.total_bytes > 0:
+                    progress.update(
+                        task,
+                        total=dp.total_bytes,
+                        completed=dp.completed_bytes,
+                        description=dp.status.replace("_", " ").capitalize(),
+                    )
+                else:
+                    progress.update(task, description=dp.status.replace("_", " ").capitalize())
+
+        print_success(f"Model {target_model} downloaded successfully!")
+        console.print("\n[green]You can now use subtitle-forge for translation.[/green]")
+
+    except KeyboardInterrupt:
+        console.print("\n[yellow]Download paused. Run this command again to resume.[/yellow]")
+        raise typer.Exit(0)
+    except Exception as e:
+        print_error(f"Download failed: {e}")
+        console.print("\n[yellow]You can try again - download will resume from where it stopped.[/yellow]")
+        raise typer.Exit(1)

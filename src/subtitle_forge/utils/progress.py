@@ -2,6 +2,7 @@
 
 from typing import Optional, List
 from contextlib import contextmanager
+from datetime import datetime
 
 from rich.console import Console
 from rich.progress import (
@@ -121,6 +122,133 @@ class SubtitleProgress:
                     self.progress.update(self.current, visible=False)
 
             yield BatchTracker(progress, overall_task, current_task)
+
+
+class TranslationProgressTracker:
+    """
+    Track translation progress with detailed batch information.
+
+    Shows progress like: "Translating subtitles... 45/150 [batch 5/15] 1:30 ~ 3:00"
+    """
+
+    def __init__(
+        self,
+        total_segments: int,
+        batch_size: int = 10,
+        target_lang: str = "",
+        disable: bool = False,
+    ):
+        """
+        Initialize translation progress tracker.
+
+        Args:
+            total_segments: Total number of subtitle segments to translate.
+            batch_size: Number of segments per translation batch.
+            target_lang: Target language name for display.
+            disable: Disable progress display.
+        """
+        self.total_segments = total_segments
+        self.batch_size = batch_size
+        self.target_lang = target_lang
+        self.disable = disable
+
+        self.completed_segments = 0
+        self.current_batch = 0
+        self.total_batches = (total_segments + batch_size - 1) // batch_size
+        self.start_time: Optional[datetime] = None
+
+        self._progress: Optional[Progress] = None
+        self._task_id: Optional[TaskID] = None
+
+    def __enter__(self):
+        self.start_time = datetime.now()
+
+        self._progress = Progress(
+            SpinnerColumn(),
+            TextColumn("[bold blue]{task.description}"),
+            BarColumn(bar_width=40),
+            MofNCompleteColumn(),
+            TextColumn("[dim]batch {task.fields[batch]}/{task.fields[total_batches]}[/dim]"),
+            TimeElapsedColumn(),
+            TextColumn("[dim]~[/dim]"),
+            TimeRemainingColumn(),
+            console=console,
+            disable=self.disable,
+        )
+        self._progress.start()
+
+        desc = f"Translating to {self.target_lang}..." if self.target_lang else "Translating..."
+        self._task_id = self._progress.add_task(
+            desc,
+            total=self.total_segments,
+            batch=0,
+            total_batches=self.total_batches,
+        )
+        return self
+
+    def __exit__(self, *args):
+        if self._progress:
+            self._progress.stop()
+
+    def update(self, completed: int, total: int):
+        """
+        Update progress - designed to be used as translator callback.
+
+        Args:
+            completed: Number of segments completed.
+            total: Total number of segments.
+        """
+        self.completed_segments = completed
+        self.current_batch = (completed + self.batch_size - 1) // self.batch_size
+
+        if self._progress and self._task_id is not None:
+            self._progress.update(
+                self._task_id,
+                completed=completed,
+                batch=self.current_batch,
+            )
+
+    def get_stats(self) -> dict:
+        """Get translation statistics."""
+        elapsed = 0.0
+        if self.start_time:
+            elapsed = (datetime.now() - self.start_time).total_seconds()
+
+        rate = self.completed_segments / elapsed if elapsed > 0 else 0
+
+        return {
+            "completed": self.completed_segments,
+            "total": self.total_segments,
+            "batches_done": self.current_batch,
+            "total_batches": self.total_batches,
+            "elapsed_seconds": elapsed,
+            "rate_per_second": rate,
+        }
+
+
+def print_translation_explainer(show_once: bool = True) -> None:
+    """
+    Print user-friendly explanation of the translation process.
+
+    Args:
+        show_once: Only show once per session (uses module-level flag).
+    """
+    # Module-level flag to track if already shown
+    if show_once and getattr(print_translation_explainer, "_shown", False):
+        return
+
+    console.print(Panel(
+        "[cyan]Translation Process[/cyan]\n\n"
+        "Your subtitles are being translated using a local AI model.\n"
+        "This runs entirely on your computer - no internet required.\n\n"
+        "[dim]Progress shows: completed subtitles / total subtitles[/dim]\n"
+        "[dim]Batch processing: subtitles are translated in groups for efficiency[/dim]",
+        title="What's happening?",
+        border_style="blue",
+    ))
+
+    if show_once:
+        print_translation_explainer._shown = True
 
 
 def print_task_summary(tasks: List[VideoTask]) -> None:
