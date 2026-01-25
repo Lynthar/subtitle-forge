@@ -223,6 +223,40 @@ subtitle-forge transcribe video.mp4 --auto-model
 
 ---
 
+## Updating
+
+### If installed from GitHub (git clone)
+
+```bash
+cd subtitle-forge
+git pull origin main
+
+# Clean old cache files (recommended)
+find . -type d -name "__pycache__" -exec rm -rf {} + 2>/dev/null
+
+# Reinstall (only needed if dependencies changed)
+pip install -e .
+```
+
+Or use this one-liner:
+```bash
+cd subtitle-forge && git pull && find . -name "__pycache__" -exec rm -rf {} + 2>/dev/null; pip install -e .
+```
+
+### If installed from PyPI (future)
+
+```bash
+pip install --upgrade subtitle-forge
+```
+
+### Check your version
+
+```bash
+subtitle-forge version
+```
+
+---
+
 ## Requirements
 
 - Python 3.9+
