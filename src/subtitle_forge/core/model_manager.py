@@ -62,10 +62,25 @@ class OllamaModelManager:
 
         Returns:
             List of model names.
+
+        Note:
+            Ollama API returns ListResponse with models: Sequence[Model]
+            where Model.model is the model name (Optional[str]).
+            See: https://github.com/ollama/ollama-python/blob/main/ollama/_types.py
         """
         try:
-            models = self.client.list()
-            return [m["name"] for m in models.get("models", [])]
+            response = self.client.list()
+            # ListResponse has 'models' attribute containing Model objects
+            # Each Model has 'model' field (not 'name') as the model identifier
+            models = getattr(response, "models", []) or []
+
+            result = []
+            for m in models:
+                # Model.model is the actual field name in Ollama's API
+                name = getattr(m, "model", None)
+                if name:
+                    result.append(name)
+            return result
         except Exception as e:
             logger.error(f"Failed to list models: {e}")
             return []
@@ -119,10 +134,18 @@ class OllamaModelManager:
 
         try:
             for progress in self.client.pull(model, stream=True):
-                status = progress.get("status", "unknown")
-                total = progress.get("total", 0)
-                completed = progress.get("completed", 0)
-                digest = progress.get("digest", "")
+                # Ollama returns ProgressResponse objects with:
+                #   status: str, total: Optional[int], completed: Optional[int], digest: Optional[str]
+                # Note: 'total' and 'completed' are Optional and may be None during initialization
+                # See: https://github.com/ollama/ollama-python/blob/main/ollama/_types.py
+                status = getattr(progress, "status", "unknown") or "unknown"
+                total = getattr(progress, "total", None)
+                completed = getattr(progress, "completed", None)
+                digest = getattr(progress, "digest", None) or ""
+
+                # Ensure numeric values are not None (API returns None before download starts)
+                total = total if total is not None else 0
+                completed = completed if completed is not None else 0
 
                 dp = DownloadProgress(
                     status=status,
