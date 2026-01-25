@@ -91,24 +91,7 @@ class SubtitleTranslator:
 
     def check_model_available(self) -> bool:
         """Check if Ollama model is available."""
-        try:
-            models = self.client.list()
-            available_models = [m["name"] for m in models.get("models", [])]
-
-            model_base = self.config.model.split(":")[0]
-            for available in available_models:
-                if self.config.model == available or model_base in available:
-                    return True
-
-            logger.warning(
-                f"Model {self.config.model} not available. "
-                f"Available models: {', '.join(available_models)}"
-            )
-            return False
-
-        except Exception as e:
-            logger.error(f"Cannot connect to Ollama: {e}")
-            return False
+        return self.model_manager.is_model_available(self.config.model)
 
     def _build_translation_prompt(
         self,

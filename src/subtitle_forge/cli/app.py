@@ -224,11 +224,12 @@ def process(
                         dl_task = dl_progress.add_task("Downloading...", total=None)
 
                         def update_download(dp):
-                            if dp.total_bytes > 0:
+                            # Safely check total_bytes (may be None or 0 during initialization)
+                            if dp.total_bytes and dp.total_bytes > 0:
                                 dl_progress.update(
                                     dl_task,
                                     total=dp.total_bytes,
-                                    completed=dp.completed_bytes,
+                                    completed=dp.completed_bytes or 0,
                                     description=dp.status.replace("_", " ").capitalize(),
                                 )
 
