@@ -1,9 +1,10 @@
 """Speech recognition module using faster-whisper."""
 
 from pathlib import Path
-from typing import Optional, List, Tuple
+from typing import Optional, List, Tuple, Callable
 from dataclasses import dataclass
 import logging
+import os
 
 from faster_whisper import WhisperModel, BatchedInferencePipeline
 
@@ -12,6 +13,42 @@ from ..utils.gpu import get_optimal_compute_type, get_available_vram
 from ..exceptions import TranscriptionError
 
 logger = logging.getLogger(__name__)
+
+# Model name to HuggingFace repo mapping
+WHISPER_HF_REPOS = {
+    "tiny": "Systran/faster-whisper-tiny",
+    "tiny.en": "Systran/faster-whisper-tiny.en",
+    "base": "Systran/faster-whisper-base",
+    "base.en": "Systran/faster-whisper-base.en",
+    "small": "Systran/faster-whisper-small",
+    "small.en": "Systran/faster-whisper-small.en",
+    "medium": "Systran/faster-whisper-medium",
+    "medium.en": "Systran/faster-whisper-medium.en",
+    "large-v1": "Systran/faster-whisper-large-v1",
+    "large-v2": "Systran/faster-whisper-large-v2",
+    "large-v3": "Systran/faster-whisper-large-v3",
+    "large-v3-turbo": "Systran/faster-whisper-large-v3-turbo",
+    "distil-large-v2": "Systran/faster-distil-whisper-large-v2",
+    "distil-large-v3": "Systran/faster-distil-whisper-large-v3",
+}
+
+# Approximate model sizes in bytes for progress display
+WHISPER_MODEL_SIZES = {
+    "tiny": 75_000_000,       # ~75MB
+    "tiny.en": 75_000_000,
+    "base": 145_000_000,      # ~145MB
+    "base.en": 145_000_000,
+    "small": 488_000_000,     # ~488MB
+    "small.en": 488_000_000,
+    "medium": 1_530_000_000,  # ~1.5GB
+    "medium.en": 1_530_000_000,
+    "large-v1": 3_100_000_000,  # ~3.1GB
+    "large-v2": 3_100_000_000,
+    "large-v3": 3_100_000_000,
+    "large-v3-turbo": 1_600_000_000,  # ~1.6GB
+    "distil-large-v2": 1_500_000_000,
+    "distil-large-v3": 1_500_000_000,
+}
 
 
 @dataclass
@@ -94,6 +131,122 @@ class Transcriber:
                 return model_name
 
         return "tiny"
+
+    def is_model_cached(self) -> bool:
+        """
+        Check if Whisper model is already downloaded.
+
+        Returns:
+            True if model files exist locally.
+        """
+        try:
+            from huggingface_hub import try_to_load_from_cache, _CACHED_NO_EXIST
+
+            repo_id = WHISPER_HF_REPOS.get(self.model_name, self.model_name)
+
+            # Check for the main model file
+            result = try_to_load_from_cache(
+                repo_id,
+                "model.bin",
+                cache_dir=self.download_root,
+            )
+
+            return result is not None and result != _CACHED_NO_EXIST
+
+        except Exception as e:
+            logger.debug(f"Could not check model cache: {e}")
+            # If we can't check, assume not cached
+            return False
+
+    def get_model_size(self) -> int:
+        """Get approximate model size in bytes."""
+        return WHISPER_MODEL_SIZES.get(self.model_name, 1_000_000_000)
+
+    def download_model(
+        self,
+        progress_callback: Optional[Callable[[int, int], None]] = None,
+    ) -> None:
+        """
+        Download Whisper model with progress tracking.
+
+        Args:
+            progress_callback: Callback(downloaded_bytes, total_bytes) for progress updates.
+        """
+        from huggingface_hub import snapshot_download
+        from tqdm import tqdm
+
+        repo_id = WHISPER_HF_REPOS.get(self.model_name, self.model_name)
+        model_size = self.get_model_size()
+
+        logger.info(f"Downloading Whisper model: {self.model_name} from {repo_id}")
+
+        class DownloadProgressCallback(tqdm):
+            """Custom tqdm class to capture download progress."""
+
+            def __init__(self, *args, callback=None, **kwargs):
+                super().__init__(*args, **kwargs)
+                self._callback = callback
+                self._downloaded = 0
+
+            def update(self, n=1):
+                super().update(n)
+                self._downloaded += n
+                if self._callback and self.total:
+                    self._callback(self._downloaded, self.total)
+
+        try:
+            # Use snapshot_download with custom tqdm class for progress
+            if progress_callback:
+                # Set environment variable to enable progress bars
+                original_tqdm_disable = os.environ.get("HF_HUB_DISABLE_PROGRESS_BARS")
+                os.environ["HF_HUB_DISABLE_PROGRESS_BARS"] = "0"
+
+                try:
+                    snapshot_download(
+                        repo_id,
+                        cache_dir=self.download_root,
+                        local_files_only=False,
+                        tqdm_class=lambda *args, **kwargs: DownloadProgressCallback(
+                            *args, callback=progress_callback, **kwargs
+                        ),
+                    )
+                finally:
+                    if original_tqdm_disable is None:
+                        os.environ.pop("HF_HUB_DISABLE_PROGRESS_BARS", None)
+                    else:
+                        os.environ["HF_HUB_DISABLE_PROGRESS_BARS"] = original_tqdm_disable
+            else:
+                snapshot_download(
+                    repo_id,
+                    cache_dir=self.download_root,
+                    local_files_only=False,
+                )
+
+            logger.info(f"Model {self.model_name} downloaded successfully")
+
+        except Exception as e:
+            logger.error(f"Failed to download model: {e}")
+            raise TranscriptionError(f"Failed to download Whisper model: {e}")
+
+    def ensure_model_downloaded(
+        self,
+        progress_callback: Optional[Callable[[int, int], None]] = None,
+    ) -> bool:
+        """
+        Ensure Whisper model is downloaded, with optional progress callback.
+
+        Args:
+            progress_callback: Callback(downloaded_bytes, total_bytes) for progress.
+
+        Returns:
+            True if model was downloaded, False if already cached.
+        """
+        if self.is_model_cached():
+            logger.info(f"Whisper model {self.model_name} is already cached")
+            return False
+
+        self.download_model(progress_callback)
+        return True
 
     def load_model(self) -> None:
         """Load Whisper model."""
