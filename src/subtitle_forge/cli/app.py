@@ -171,12 +171,39 @@ def process(
             tracker.update("[1/4] Audio extraction complete")
 
             # 2. Transcribe
-            tracker.set_description(f"[2/4] Transcribing: {video.name}")
+            tracker.set_description(f"[2/4] Preparing transcription: {video.name}")
             transcriber = Transcriber(
                 model_name=cfg.whisper.model,
                 device=cfg.whisper.device,
                 compute_type=cfg.whisper.compute_type,
             )
+
+            # Check if Whisper model needs to be downloaded
+            if not transcriber.is_model_cached():
+                from rich.progress import Progress, SpinnerColumn, BarColumn, TextColumn, DownloadColumn
+
+                model_size_mb = transcriber.get_model_size() / (1024 * 1024)
+                console.print(f"\n[cyan]Downloading Whisper model: {cfg.whisper.model}[/cyan]")
+                console.print(f"[dim]Model size: ~{model_size_mb:.0f}MB (one-time download)[/dim]\n")
+
+                with Progress(
+                    SpinnerColumn(),
+                    TextColumn("[bold blue]{task.description}"),
+                    BarColumn(bar_width=40),
+                    TextColumn("[progress.percentage]{task.percentage:>3.1f}%"),
+                    DownloadColumn(),
+                    console=console,
+                ) as dl_progress:
+                    dl_task = dl_progress.add_task("Downloading...", total=transcriber.get_model_size())
+
+                    def update_whisper_download(downloaded: int, total: int):
+                        dl_progress.update(dl_task, completed=downloaded, total=total)
+
+                    transcriber.ensure_model_downloaded(progress_callback=update_whisper_download)
+
+                print_info("Whisper model downloaded successfully!")
+
+            tracker.set_description(f"[2/4] Transcribing: {video.name}")
             segments, info = transcriber.transcribe(
                 audio_path,
                 language=source_lang,

@@ -1,7 +1,7 @@
 """Interactive setup wizard for first-time users."""
 
 import shutil
-from typing import Optional
+from typing import Optional, Callable
 
 import typer
 from rich.console import Console
@@ -12,6 +12,50 @@ from .progress import print_success, print_error, print_info, print_warning
 from ..models.config import AppConfig
 
 console = Console()
+
+
+def check_whisper_model(model_name: str) -> bool:
+    """Check if Whisper model is already downloaded."""
+    from ..core.transcriber import Transcriber
+
+    transcriber = Transcriber(model_name=model_name)
+    return transcriber.is_model_cached()
+
+
+def download_whisper_model(
+    model_name: str,
+    progress_callback: Optional[Callable[[int, int], None]] = None,
+) -> bool:
+    """Download Whisper model with progress display."""
+    from ..core.transcriber import Transcriber
+
+    transcriber = Transcriber(model_name=model_name)
+
+    try:
+        model_size = transcriber.get_model_size()
+
+        with Progress(
+            SpinnerColumn(),
+            TextColumn("[bold blue]{task.description}"),
+            BarColumn(bar_width=40),
+            TextColumn("[progress.percentage]{task.percentage:>3.1f}%"),
+            DownloadColumn(),
+            console=console,
+        ) as progress:
+            task = progress.add_task("Downloading...", total=model_size)
+
+            def update_progress(downloaded: int, total: int):
+                progress.update(task, completed=downloaded, total=total)
+
+            transcriber.download_model(progress_callback=update_progress)
+
+        return True
+    except KeyboardInterrupt:
+        console.print("\n[yellow]Download paused. You can resume later when running subtitle-forge.[/yellow]")
+        return False
+    except Exception as e:
+        console.print(f"\n[red]Download failed: {e}[/red]")
+        return False
 
 
 def check_ffmpeg() -> bool:
@@ -99,7 +143,7 @@ def run_setup_wizard() -> None:
     issues_found = []
 
     # Step 1: Check ffmpeg
-    console.print("[bold]Step 1/4: Checking ffmpeg...[/bold]")
+    console.print("[bold]Step 1/5: Checking ffmpeg...[/bold]")
 
     if check_ffmpeg():
         console.print("  [green]OK[/green] ffmpeg is installed")
@@ -119,7 +163,7 @@ def run_setup_wizard() -> None:
     console.print()
 
     # Step 2: Check GPU
-    console.print("[bold]Step 2/4: Checking GPU...[/bold]")
+    console.print("[bold]Step 2/5: Checking GPU...[/bold]")
 
     gpu_info = check_gpu()
     if gpu_info.get("cuda_available"):
@@ -136,10 +180,43 @@ def run_setup_wizard() -> None:
 
     console.print()
 
-    # Step 3: Check Ollama
-    console.print("[bold]Step 3/4: Checking Ollama (translation engine)...[/bold]")
+    # Step 3: Check Whisper model (transcription)
+    console.print("[bold]Step 3/5: Checking Whisper model (transcription engine)...[/bold]")
 
     config = AppConfig.load()
+
+    if check_whisper_model(config.whisper.model):
+        console.print(f"  [green]OK[/green] Whisper model '{config.whisper.model}' is ready")
+    else:
+        from ..core.transcriber import Transcriber, WHISPER_MODEL_SIZES
+
+        model_size = WHISPER_MODEL_SIZES.get(config.whisper.model, 1_000_000_000)
+        model_size_mb = model_size / (1024 * 1024)
+
+        console.print(f"  [yellow]MISSING[/yellow] Whisper model '{config.whisper.model}' not downloaded")
+        console.print()
+        console.print(f"  The Whisper model is needed for speech recognition.")
+        console.print(f"  Size: ~{model_size_mb:.0f}MB (one-time download)")
+        console.print()
+
+        if typer.confirm(f"  Download '{config.whisper.model}' now?", default=True):
+            console.print()
+            console.print("  [dim]Tip: If interrupted, it will auto-download when you run subtitle-forge[/dim]")
+            console.print()
+
+            if download_whisper_model(config.whisper.model):
+                console.print()
+                console.print(f"  [green]OK[/green] Whisper model '{config.whisper.model}' downloaded successfully!")
+            else:
+                issues_found.append("whisper-model")
+        else:
+            console.print()
+            console.print("  [dim]Model will be downloaded automatically when you first run subtitle-forge[/dim]")
+
+    console.print()
+
+    # Step 4: Check Ollama
+    console.print("[bold]Step 4/5: Checking Ollama (translation engine)...[/bold]")
 
     if check_ollama_connection(config.ollama.host):
         console.print(f"  [green]OK[/green] Ollama is running at {config.ollama.host}")
@@ -157,8 +234,8 @@ def run_setup_wizard() -> None:
 
     console.print()
 
-    # Step 4: Check/download translation model
-    console.print("[bold]Step 4/4: Checking translation model...[/bold]")
+    # Step 5: Check/download translation model
+    console.print("[bold]Step 5/5: Checking translation model...[/bold]")
 
     if "ollama" in issues_found:
         console.print("  [yellow]SKIPPED[/yellow] Ollama not running, cannot check model")
