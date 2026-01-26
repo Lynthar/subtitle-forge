@@ -140,7 +140,13 @@ class Transcriber:
             True if model files exist locally.
         """
         try:
-            from huggingface_hub import try_to_load_from_cache, _CACHED_NO_EXIST
+            from huggingface_hub import try_to_load_from_cache
+
+            # Import _CACHED_NO_EXIST separately as it might not exist in older versions
+            try:
+                from huggingface_hub import _CACHED_NO_EXIST
+            except ImportError:
+                _CACHED_NO_EXIST = None
 
             repo_id = WHISPER_HF_REPOS.get(self.model_name, self.model_name)
 
@@ -151,7 +157,16 @@ class Transcriber:
                 cache_dir=self.download_root,
             )
 
-            return result is not None and result != _CACHED_NO_EXIST
+            # If result is a string path, the file is cached
+            if isinstance(result, str):
+                return True
+
+            # If _CACHED_NO_EXIST exists and result equals it, file definitely doesn't exist
+            if _CACHED_NO_EXIST is not None and result is _CACHED_NO_EXIST:
+                return False
+
+            # Otherwise (result is None), file is not cached
+            return False
 
         except Exception as e:
             logger.debug(f"Could not check model cache: {e}")
@@ -173,30 +188,36 @@ class Transcriber:
             progress_callback: Callback(downloaded_bytes, total_bytes) for progress updates.
         """
         from huggingface_hub import snapshot_download
-        from tqdm import tqdm
 
         repo_id = WHISPER_HF_REPOS.get(self.model_name, self.model_name)
-        model_size = self.get_model_size()
 
         logger.info(f"Downloading Whisper model: {self.model_name} from {repo_id}")
 
-        class DownloadProgressCallback(tqdm):
-            """Custom tqdm class to capture download progress."""
-
-            def __init__(self, *args, callback=None, **kwargs):
-                super().__init__(*args, **kwargs)
-                self._callback = callback
-                self._downloaded = 0
-
-            def update(self, n=1):
-                super().update(n)
-                self._downloaded += n
-                if self._callback and self.total:
-                    self._callback(self._downloaded, self.total)
-
         try:
-            # Use snapshot_download with custom tqdm class for progress
             if progress_callback:
+                # Create a custom tqdm class that captures progress
+                # Must be a proper class (not lambda) because tqdm_class needs class methods like get_lock()
+                from tqdm.auto import tqdm as base_tqdm
+
+                # Use a class factory to inject the callback
+                class ProgressTqdm(base_tqdm):
+                    """Custom tqdm class to capture download progress."""
+
+                    # Class-level callback storage (set before instantiation)
+                    _progress_callback = progress_callback
+
+                    def __init__(self, *args, **kwargs):
+                        super().__init__(*args, **kwargs)
+                        self._downloaded = 0
+
+                    def update(self, n=1):
+                        result = super().update(n)
+                        if n:
+                            self._downloaded += n
+                            if ProgressTqdm._progress_callback and self.total:
+                                ProgressTqdm._progress_callback(self._downloaded, self.total)
+                        return result
+
                 # Set environment variable to enable progress bars
                 original_tqdm_disable = os.environ.get("HF_HUB_DISABLE_PROGRESS_BARS")
                 os.environ["HF_HUB_DISABLE_PROGRESS_BARS"] = "0"
@@ -206,9 +227,7 @@ class Transcriber:
                         repo_id,
                         cache_dir=self.download_root,
                         local_files_only=False,
-                        tqdm_class=lambda *args, **kwargs: DownloadProgressCallback(
-                            *args, callback=progress_callback, **kwargs
-                        ),
+                        tqdm_class=ProgressTqdm,
                     )
                 finally:
                     if original_tqdm_disable is None:
