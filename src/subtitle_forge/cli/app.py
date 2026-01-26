@@ -163,6 +163,106 @@ def process(
     progress = SubtitleProgress()
 
     try:
+        # ========== Phase 1: Prepare models (outside main progress bar) ==========
+
+        # Initialize transcriber
+        transcriber = Transcriber(
+            model_name=cfg.whisper.model,
+            device=cfg.whisper.device,
+            compute_type=cfg.whisper.compute_type,
+        )
+
+        # Check and download Whisper model if needed (separate progress bar)
+        if not transcriber.is_model_cached():
+            from rich.progress import Progress, SpinnerColumn, BarColumn, TextColumn, DownloadColumn
+            import logging
+
+            model_size_mb = transcriber.get_model_size() / (1024 * 1024)
+            console.print(f"\n[cyan]Downloading Whisper model: {cfg.whisper.model}[/cyan]")
+            console.print(f"[dim]Model size: ~{model_size_mb:.0f}MB (one-time download)[/dim]\n")
+
+            # Suppress logs during download to avoid interfering with progress bar
+            hf_logger = logging.getLogger("huggingface_hub")
+            sf_logger = logging.getLogger("subtitle_forge")
+            original_hf_level = hf_logger.level
+            original_sf_level = sf_logger.level
+            hf_logger.setLevel(logging.ERROR)
+            sf_logger.setLevel(logging.ERROR)
+
+            try:
+                with Progress(
+                    SpinnerColumn(),
+                    TextColumn("[bold blue]{task.description}"),
+                    BarColumn(bar_width=40),
+                    TextColumn("[progress.percentage]{task.percentage:>3.1f}%"),
+                    DownloadColumn(),
+                    console=console,
+                ) as dl_progress:
+                    dl_task = dl_progress.add_task("Downloading...", total=transcriber.get_model_size())
+                    last_completed = 0
+
+                    def update_whisper_download(downloaded: int, total: int):
+                        nonlocal last_completed
+                        # Only update completed, not total (avoid accumulation bug)
+                        if downloaded > last_completed:
+                            dl_progress.update(dl_task, completed=downloaded)
+                            last_completed = downloaded
+
+                    transcriber.ensure_model_downloaded(progress_callback=update_whisper_download)
+            finally:
+                # Restore log levels
+                hf_logger.setLevel(original_hf_level)
+                sf_logger.setLevel(original_sf_level)
+
+            print_info("Whisper model downloaded successfully!\n")
+
+        # Initialize translator
+        translator = SubtitleTranslator(
+            TranslationConfig(
+                model=cfg.ollama.model,
+                host=cfg.ollama.host,
+                temperature=cfg.ollama.temperature,
+                max_batch_size=cfg.ollama.max_batch_size,
+            )
+        )
+
+        # Check and download translation model if needed (separate progress bar)
+        if not translator.check_model_available():
+            print_warning(f"Translation model '{cfg.ollama.model}' not found")
+            if typer.confirm("Download model now?", default=True):
+                from rich.progress import Progress, SpinnerColumn, BarColumn, TextColumn, DownloadColumn
+
+                console.print(f"\n[cyan]Downloading model: {cfg.ollama.model}[/cyan]")
+                console.print("[dim]This may take a while for large models...[/dim]\n")
+
+                with Progress(
+                    SpinnerColumn(),
+                    TextColumn("[bold blue]{task.description}"),
+                    BarColumn(bar_width=40),
+                    TextColumn("[progress.percentage]{task.percentage:>3.1f}%"),
+                    DownloadColumn(),
+                    console=console,
+                ) as dl_progress:
+                    dl_task = dl_progress.add_task("Downloading...", total=None)
+
+                    def update_download(dp):
+                        if dp.total_bytes and dp.total_bytes > 0:
+                            dl_progress.update(
+                                dl_task,
+                                total=dp.total_bytes,
+                                completed=dp.completed_bytes or 0,
+                                description=dp.status.replace("_", " ").capitalize(),
+                            )
+
+                    translator.ensure_model_ready(progress_callback=update_download)
+
+                print_info("Model downloaded successfully!\n")
+            else:
+                print_error("Translation requires the configured model. Run: subtitle-forge config pull-model")
+                raise typer.Exit(1)
+
+        # ========== Phase 2: Main processing (single progress bar) ==========
+
         with progress.track_video(video.name) as tracker:
             # 1. Extract audio
             tracker.set_description(f"[1/4] Extracting audio: {video.name}")
@@ -172,11 +272,6 @@ def process(
 
             # 2. Transcribe
             tracker.set_description(f"[2/4] Transcribing: {video.name}")
-            transcriber = Transcriber(
-                model_name=cfg.whisper.model,
-                device=cfg.whisper.device,
-                compute_type=cfg.whisper.compute_type,
-            )
             segments, info = transcriber.transcribe(
                 audio_path,
                 language=source_lang,
@@ -193,52 +288,8 @@ def process(
                 subtitle_processor.save(segments, original_srt)
                 print_info(f"Original subtitles saved: {original_srt}")
 
-            # 4. Translate
-            tracker.set_description(f"[3/4] Preparing translation: {video.name}")
-            translator = SubtitleTranslator(
-                TranslationConfig(
-                    model=cfg.ollama.model,
-                    host=cfg.ollama.host,
-                    temperature=cfg.ollama.temperature,
-                    max_batch_size=cfg.ollama.max_batch_size,
-                )
-            )
-
-            # Check if translation model is available
-            if not translator.check_model_available():
-                print_warning(f"Translation model '{cfg.ollama.model}' not found")
-                if typer.confirm("Download model now?", default=True):
-                    from rich.progress import Progress, SpinnerColumn, BarColumn, TextColumn, DownloadColumn
-
-                    console.print(f"\n[cyan]Downloading model: {cfg.ollama.model}[/cyan]")
-                    console.print("[dim]This may take a while for large models...[/dim]\n")
-
-                    with Progress(
-                        SpinnerColumn(),
-                        TextColumn("[bold blue]{task.description}"),
-                        BarColumn(bar_width=40),
-                        TextColumn("[progress.percentage]{task.percentage:>3.1f}%"),
-                        DownloadColumn(),
-                        console=console,
-                    ) as dl_progress:
-                        dl_task = dl_progress.add_task("Downloading...", total=None)
-
-                        def update_download(dp):
-                            # Safely check total_bytes (may be None or 0 during initialization)
-                            if dp.total_bytes and dp.total_bytes > 0:
-                                dl_progress.update(
-                                    dl_task,
-                                    total=dp.total_bytes,
-                                    completed=dp.completed_bytes or 0,
-                                    description=dp.status.replace("_", " ").capitalize(),
-                                )
-
-                        translator.ensure_model_ready(progress_callback=update_download)
-
-                    print_info("Model downloaded successfully!")
-                else:
-                    print_error("Translation requires the configured model. Run: subtitle-forge config pull-model")
-                    raise typer.Exit(1)
+            # 3. Translate (models already prepared in Phase 1)
+            tracker.set_description(f"[3/4] Translating: {video.name}")
 
             # Show explanation for first-time users
             print_translation_explainer()

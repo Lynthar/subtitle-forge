@@ -60,8 +60,11 @@ def transcribe_video(
     from ...models.config import AppConfig
     from ...utils.progress import SubtitleProgress, print_success, print_error, print_info
 
+    from rich.console import Console
+
     config = AppConfig.load()
     progress = SubtitleProgress()
+    console = Console()
 
     # Model selection
     if auto_model:
@@ -71,6 +74,60 @@ def transcribe_video(
         model_name = model or config.whisper.model
 
     try:
+        # ========== Phase 1: Prepare model (outside main progress bar) ==========
+
+        transcriber = Transcriber(
+            model_name=model_name,
+            device=config.whisper.device,
+            compute_type=config.whisper.compute_type,
+        )
+
+        # Check and download Whisper model if needed (separate progress bar)
+        if not transcriber.is_model_cached():
+            from rich.progress import Progress, SpinnerColumn, BarColumn, TextColumn, DownloadColumn
+            import logging
+
+            model_size_mb = transcriber.get_model_size() / (1024 * 1024)
+            console.print(f"\n[cyan]Downloading Whisper model: {model_name}[/cyan]")
+            console.print(f"[dim]Model size: ~{model_size_mb:.0f}MB (one-time download)[/dim]\n")
+
+            # Suppress logs during download to avoid interfering with progress bar
+            hf_logger = logging.getLogger("huggingface_hub")
+            sf_logger = logging.getLogger("subtitle_forge")
+            original_hf_level = hf_logger.level
+            original_sf_level = sf_logger.level
+            hf_logger.setLevel(logging.ERROR)
+            sf_logger.setLevel(logging.ERROR)
+
+            try:
+                with Progress(
+                    SpinnerColumn(),
+                    TextColumn("[bold blue]{task.description}"),
+                    BarColumn(bar_width=40),
+                    TextColumn("[progress.percentage]{task.percentage:>3.1f}%"),
+                    DownloadColumn(),
+                    console=console,
+                ) as dl_progress:
+                    dl_task = dl_progress.add_task("Downloading...", total=transcriber.get_model_size())
+                    last_completed = 0
+
+                    def update_whisper_download(downloaded: int, total: int):
+                        nonlocal last_completed
+                        # Only update completed, not total (avoid accumulation bug)
+                        if downloaded > last_completed:
+                            dl_progress.update(dl_task, completed=downloaded)
+                            last_completed = downloaded
+
+                    transcriber.ensure_model_downloaded(progress_callback=update_whisper_download)
+            finally:
+                # Restore log levels
+                hf_logger.setLevel(original_hf_level)
+                sf_logger.setLevel(original_sf_level)
+
+            print_info("Whisper model downloaded successfully!\n")
+
+        # ========== Phase 2: Main processing (single progress bar) ==========
+
         with progress.track_video(video.name, total_steps=3) as tracker:
             # 1. Extract audio
             tracker.set_description("Extracting audio...")
@@ -78,13 +135,8 @@ def transcribe_video(
             audio_path = extractor.extract(video)
             tracker.update("Audio extraction complete")
 
-            # 2. Transcribe
+            # 2. Transcribe (model already prepared)
             tracker.set_description("Transcribing...")
-            transcriber = Transcriber(
-                model_name=model_name,
-                device=config.whisper.device,
-                compute_type=config.whisper.compute_type,
-            )
             segments, info = transcriber.transcribe(
                 audio_path,
                 language=language,
