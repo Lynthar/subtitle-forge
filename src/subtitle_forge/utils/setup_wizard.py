@@ -27,12 +27,23 @@ def download_whisper_model(
     progress_callback: Optional[Callable[[int, int], None]] = None,
 ) -> bool:
     """Download Whisper model with progress display."""
+    import logging
     from ..core.transcriber import Transcriber
 
     transcriber = Transcriber(model_name=model_name)
 
+    # Suppress logs during download to avoid interfering with progress bar
+    hf_logger = logging.getLogger("huggingface_hub")
+    sf_logger = logging.getLogger("subtitle_forge")
+    original_hf_level = hf_logger.level
+    original_sf_level = sf_logger.level
+
     try:
         model_size = transcriber.get_model_size()
+
+        # Suppress logs during download
+        hf_logger.setLevel(logging.ERROR)
+        sf_logger.setLevel(logging.ERROR)
 
         with Progress(
             SpinnerColumn(),
@@ -43,9 +54,14 @@ def download_whisper_model(
             console=console,
         ) as progress:
             task = progress.add_task("Downloading...", total=model_size)
+            last_completed = 0
 
             def update_progress(downloaded: int, total: int):
-                progress.update(task, completed=downloaded, total=total)
+                nonlocal last_completed
+                # Only update completed, not total (avoid accumulation bug)
+                if downloaded > last_completed:
+                    progress.update(task, completed=downloaded)
+                    last_completed = downloaded
 
             transcriber.download_model(progress_callback=update_progress)
 
@@ -56,6 +72,10 @@ def download_whisper_model(
     except Exception as e:
         console.print(f"\n[red]Download failed: {e}[/red]")
         return False
+    finally:
+        # Restore log levels
+        hf_logger.setLevel(original_hf_level)
+        sf_logger.setLevel(original_sf_level)
 
 
 def check_ffmpeg() -> bool:
