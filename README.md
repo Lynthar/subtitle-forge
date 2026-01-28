@@ -112,6 +112,31 @@ subtitle-forge config pull-model
 
 If download fails, just run the command again - it will resume from where it stopped.
 
+### Whisper model download is slow (China/Asia users)
+
+If the Whisper model (~3GB) downloads very slowly, configure a HuggingFace mirror:
+
+**Temporary (current session only):**
+```bash
+export HF_ENDPOINT=https://hf-mirror.com
+subtitle-forge process video.mp4 -t zh
+```
+
+**Permanent configuration:**
+```bash
+# For zsh (macOS default)
+echo 'export HF_ENDPOINT=https://hf-mirror.com' >> ~/.zshrc
+source ~/.zshrc
+
+# For bash (Linux default)
+echo 'export HF_ENDPOINT=https://hf-mirror.com' >> ~/.bashrc
+source ~/.bashrc
+```
+
+Alternative mirrors:
+- `https://hf-mirror.com` (recommended)
+- `https://huggingface.sukaka.top`
+
 ### "Translation is very slow"
 
 - **With GPU**: ~10-20 subtitles per second
