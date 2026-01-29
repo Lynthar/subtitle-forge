@@ -46,6 +46,50 @@ class SubtitleTranslator:
         "th": "Thai",
     }
 
+    # Approximate VRAM requirements for Ollama models (MB)
+    OLLAMA_MODEL_VRAM = {
+        "qwen2.5:7b": 5000,    # ~5GB
+        "qwen2.5:14b": 9000,   # ~9GB
+        "qwen2.5:32b": 20000,  # ~20GB
+        "qwen2.5:72b": 45000,  # ~45GB
+    }
+
+    @classmethod
+    def select_optimal_model(cls, prefer_quality: bool = True) -> str:
+        """
+        Select optimal translation model based on available VRAM.
+
+        Args:
+            prefer_quality: Prefer larger/higher quality models if VRAM allows.
+
+        Returns:
+            Recommended model name.
+        """
+        from ..utils.gpu import get_available_vram
+
+        available_vram = get_available_vram()
+
+        if available_vram <= 0:
+            logger.warning("Cannot detect GPU VRAM, using default model")
+            return "qwen2.5:14b"
+
+        # Sort models by VRAM requirement (larger first if prefer_quality)
+        sorted_models = sorted(
+            cls.OLLAMA_MODEL_VRAM.items(),
+            key=lambda x: x[1],
+            reverse=prefer_quality,
+        )
+
+        for model_name, required_vram in sorted_models:
+            if available_vram >= required_vram * 1.1:  # 10% headroom
+                logger.info(
+                    f"Selected translation model: {model_name} "
+                    f"(requires {required_vram}MB, available {available_vram}MB)"
+                )
+                return model_name
+
+        return "qwen2.5:7b"  # Fallback to smallest model
+
     def __init__(self, config: Optional[TranslationConfig] = None):
         self.config = config or TranslationConfig()
         self._client: Optional[Client] = None
@@ -98,28 +142,63 @@ class SubtitleTranslator:
         segments: List[SubtitleSegment],
         source_lang: str,
         target_lang: str,
+        context_before: Optional[List[SubtitleSegment]] = None,
+        context_after: Optional[List[SubtitleSegment]] = None,
     ) -> str:
-        """Build translation prompt with structured format."""
+        """
+        Build translation prompt with context for natural translation.
+
+        Args:
+            segments: Segments to translate.
+            source_lang: Source language code.
+            target_lang: Target language code.
+            context_before: Previous segments for context (not translated).
+            context_after: Following segments for context (not translated).
+
+        Returns:
+            Formatted prompt string.
+        """
         source_name = self.LANGUAGE_NAMES.get(source_lang, source_lang)
         target_name = self.LANGUAGE_NAMES.get(target_lang, target_lang)
 
+        prompt_parts = []
+
+        # Enhanced system instruction optimized for movies/TV dramas
+        prompt_parts.append(f"""You are an expert subtitle translator for movies and TV dramas.
+
+TRANSLATION GUIDELINES:
+1. Preserve natural dialogue flow and conversational tone
+2. Capture emotional nuance, character voice, and speaker intent
+3. Use appropriate register (formal/informal) based on context
+4. Keep translations concise for subtitle readability
+5. Maintain consistency with surrounding dialogue
+6. Preserve the [number] prefix for each line
+7. Output ONLY the translated lines, no explanations""")
+
+        # Add previous context if available
+        if context_before:
+            context_lines = [f"  [{seg.index}] {seg.text}" for seg in context_before[-3:]]
+            prompt_parts.append(f"""
+PREVIOUS DIALOGUE (for context, DO NOT translate):
+{chr(10).join(context_lines)}""")
+
+        # Main segments to translate
         lines = [f"[{seg.index}] {seg.text}" for seg in segments]
+        prompt_parts.append(f"""
+TRANSLATE THESE LINES from {source_name} to {target_name}:
+{chr(10).join(lines)}""")
 
-        prompt = f"""You are a professional subtitle translator. Translate the following subtitle lines from {source_name} to {target_name}.
+        # Add following context if available
+        if context_after:
+            context_lines = [f"  [{seg.index}] {seg.text}" for seg in context_after[:2]]
+            prompt_parts.append(f"""
+FOLLOWING DIALOGUE (for context, DO NOT translate):
+{chr(10).join(context_lines)}""")
 
-IMPORTANT RULES:
-1. Preserve the [number] prefix for each line
-2. Keep translations concise and suitable for subtitles
-3. Maintain the original meaning and tone
-4. Do not add explanations or notes
-5. Output ONLY the translated lines, nothing else
+        prompt_parts.append("""
+Translated subtitles:""")
 
-Source subtitles:
-{chr(10).join(lines)}
-
-Translated subtitles:"""
-
-        return prompt
+        return "\n".join(prompt_parts)
 
     def _parse_translation_response(
         self,
@@ -160,14 +239,18 @@ Translated subtitles:"""
         segments: List[SubtitleSegment],
         source_lang: str,
         target_lang: str,
+        context_before: Optional[List[SubtitleSegment]] = None,
+        context_after: Optional[List[SubtitleSegment]] = None,
     ) -> List[SubtitleSegment]:
         """
-        Translate a batch of subtitles.
+        Translate a batch of subtitles with context.
 
         Args:
             segments: Subtitle segments to translate.
             source_lang: Source language code.
             target_lang: Target language code.
+            context_before: Previous segments for context.
+            context_after: Following segments for context.
 
         Returns:
             Translated subtitle segments.
@@ -175,7 +258,11 @@ Translated subtitles:"""
         if not segments:
             return []
 
-        prompt = self._build_translation_prompt(segments, source_lang, target_lang)
+        prompt = self._build_translation_prompt(
+            segments, source_lang, target_lang,
+            context_before=context_before,
+            context_after=context_after,
+        )
 
         for attempt in range(self.config.max_retries):
             try:
@@ -208,15 +295,17 @@ Translated subtitles:"""
         source_lang: str,
         target_lang: str,
         progress_callback: Optional[Callable[[int, int], None]] = None,
+        context_window: int = 3,
     ) -> List[SubtitleSegment]:
         """
-        Translate all subtitles.
+        Translate all subtitles with context awareness.
 
         Args:
             segments: Subtitle segments to translate.
             source_lang: Source language code.
             target_lang: Target language code.
             progress_callback: Progress callback function (completed, total).
+            context_window: Number of surrounding segments to include as context.
 
         Returns:
             Translated subtitle segments.
@@ -231,8 +320,17 @@ Translated subtitles:"""
         batch_size = self.config.max_batch_size
 
         for i in range(0, len(segments), batch_size):
-            batch = segments[i : i + batch_size]
-            translated_batch = self.translate_batch(batch, source_lang, target_lang)
+            batch = segments[i:i + batch_size]
+
+            # Get context from surrounding segments
+            context_before = segments[max(0, i - context_window):i]
+            context_after = segments[i + batch_size:i + batch_size + context_window]
+
+            translated_batch = self.translate_batch(
+                batch, source_lang, target_lang,
+                context_before=context_before,
+                context_after=context_after,
+            )
             translated_segments.extend(translated_batch)
 
             if progress_callback:

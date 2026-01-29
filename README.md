@@ -116,13 +116,13 @@ If download fails, just run the command again - it will resume from where it sto
 
 If the Whisper model (~3GB) downloads very slowly, configure a HuggingFace mirror:
 
-**Temporary (current session only):**
+**Linux/macOS (temporary):**
 ```bash
 export HF_ENDPOINT=https://hf-mirror.com
 subtitle-forge process video.mp4 -t zh
 ```
 
-**Permanent configuration:**
+**Linux/macOS (permanent):**
 ```bash
 # For zsh (macOS default)
 echo 'export HF_ENDPOINT=https://hf-mirror.com' >> ~/.zshrc
@@ -133,9 +133,72 @@ echo 'export HF_ENDPOINT=https://hf-mirror.com' >> ~/.bashrc
 source ~/.bashrc
 ```
 
+**Windows PowerShell (temporary):**
+```powershell
+$env:HF_ENDPOINT = "https://hf-mirror.com"
+subtitle-forge process video.mp4 -t zh
+```
+
+**Windows (permanent):**
+```powershell
+# Add to system environment variables
+[Environment]::SetEnvironmentVariable("HF_ENDPOINT", "https://hf-mirror.com", "User")
+# Restart PowerShell after running this command
+```
+
 Alternative mirrors:
 - `https://hf-mirror.com` (recommended)
 - `https://huggingface.sukaka.top`
+
+### GPU not detected / "CUDA not available"
+
+GPU acceleration requires PyTorch with CUDA support. The correct version depends on your GPU:
+
+**Check your current setup:**
+```bash
+subtitle-forge config check --verbose
+python -c "import torch; print(f'PyTorch: {torch.__version__}, CUDA: {torch.version.cuda}, Available: {torch.cuda.is_available()}')"
+```
+
+**Install PyTorch based on your GPU:**
+
+| GPU Series | Architecture | Required PyTorch |
+|------------|--------------|------------------|
+| RTX 50xx (5090, 5080, 5070...) | Blackwell (sm_120) | **cu128** or newer |
+| RTX 40xx (4090, 4080, 4070...) | Ada Lovelace (sm_89) | cu118, cu121, cu124 |
+| RTX 30xx (3090, 3080, 3070...) | Ampere (sm_86) | cu118, cu121, cu124 |
+| RTX 20xx / GTX 16xx | Turing (sm_75) | cu118, cu121, cu124 |
+| Older GPUs | - | cu118 |
+
+**Installation commands:**
+
+```bash
+# For RTX 50 series (5090, 5080, 5070, etc.) - MUST use cu128
+pip uninstall torch torchvision torchaudio
+pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu128
+
+# For RTX 40/30/20 series - cu124 recommended
+pip uninstall torch torchvision torchaudio
+pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu124
+
+# For CPU only (no NVIDIA GPU)
+pip uninstall torch torchvision torchaudio
+pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cpu
+```
+
+### "sm_120 is not compatible" error (RTX 50 series)
+
+If you see this error:
+```
+NVIDIA GeForce RTX 5090 with CUDA capability sm_120 is not compatible with the current PyTorch installation
+```
+
+This means you have an RTX 50 series GPU but installed the wrong PyTorch version. RTX 50 series (Blackwell architecture) requires **CUDA 12.8** or newer:
+
+```bash
+pip uninstall torch torchvision torchaudio
+pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu128
+```
 
 ### "Translation is very slow"
 
@@ -146,6 +209,28 @@ Check your GPU status:
 ```bash
 subtitle-forge config check
 ```
+
+### "Transcription is very slow" (taking 10+ minutes for short videos)
+
+This usually means GPU is not being used. Check:
+
+1. **Verify CUDA is working:**
+   ```bash
+   python -c "import torch; print(torch.cuda.is_available())"
+   ```
+   Should print `True`. If `False`, reinstall PyTorch with correct CUDA version (see above).
+
+2. **Check for architecture mismatch:**
+   ```bash
+   subtitle-forge config check --verbose
+   ```
+   Look for warnings about CUDA capability.
+
+3. **Expected transcription times (with GPU):**
+   - 1-hour video: ~2-5 minutes
+   - 3-hour video: ~5-15 minutes
+
+   If it's taking much longer, GPU acceleration is likely not working.
 
 ### Full system diagnostic
 ```bash
@@ -284,10 +369,31 @@ subtitle-forge version
 
 ## Requirements
 
-- Python 3.9+
-- NVIDIA GPU with CUDA support (recommended) or CPU
-- ffmpeg
-- Ollama (for translation)
+### Required
+- **Python**: 3.9 or higher (3.11+ recommended)
+- **ffmpeg**: For audio extraction from videos
+- **Ollama**: For AI translation ([download](https://ollama.ai/download))
+
+### Optional (for GPU acceleration)
+- **NVIDIA GPU**: Any CUDA-capable GPU (recommended for faster processing)
+- **PyTorch with CUDA**: Must match your GPU architecture
+
+### PyTorch Installation by GPU
+
+| Your GPU | Install Command |
+|----------|-----------------|
+| **RTX 50xx** (5090, 5080, 5070) | `pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu128` |
+| **RTX 40xx** (4090, 4080, 4070) | `pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu124` |
+| **RTX 30xx** (3090, 3080, 3070) | `pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu124` |
+| **RTX 20xx / GTX 16xx** | `pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu124` |
+| **No GPU / CPU only** | `pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cpu` |
+
+> **Important for RTX 50 series users**: You MUST use `cu128` or newer. Using `cu124` or older will result in "sm_120 not compatible" errors and fall back to slow CPU mode.
+
+### Disk Space
+- Whisper model: ~3GB (large-v3)
+- Translation model: ~8GB (qwen2.5:14b)
+- Temporary audio files: varies by video length
 
 ---
 

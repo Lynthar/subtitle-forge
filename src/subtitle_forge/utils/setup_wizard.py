@@ -192,11 +192,22 @@ def run_setup_wizard() -> None:
 
         # Recommend Whisper model based on VRAM
         from ..core.transcriber import Transcriber
-        recommended_model = Transcriber.select_optimal_model()
-        console.print(f"      Recommended Whisper model: [cyan]{recommended_model}[/cyan]")
+        recommended_whisper = Transcriber.select_optimal_model()
+        console.print(f"      Recommended Whisper model: [cyan]{recommended_whisper}[/cyan]")
+
+        # Recommend translation model based on VRAM
+        total_vram = gpu_info.get("total_vram_mb", 0)
+        if total_vram >= 30000:
+            recommended_ollama = "qwen2.5:32b"
+        elif total_vram >= 16000:
+            recommended_ollama = "qwen2.5:14b"
+        else:
+            recommended_ollama = "qwen2.5:7b"
+        console.print(f"      Recommended translation model: [cyan]{recommended_ollama}[/cyan]")
     else:
         console.print("  [yellow]INFO[/yellow] No NVIDIA GPU detected")
         console.print("      Transcription will use CPU (slower but functional)")
+        console.print("      Recommended translation model: [cyan]qwen2.5:7b[/cyan]")
 
     console.print()
 

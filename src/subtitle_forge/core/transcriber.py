@@ -293,14 +293,21 @@ class Transcriber:
 
         logger.info("Model loaded successfully")
 
+    # Optimized VAD parameters for subtitle timing accuracy
+    DEFAULT_VAD_PARAMETERS = {
+        "speech_pad_ms": 100,            # Reduced from 400ms to minimize early subtitle appearance
+        "min_silence_duration_ms": 500,  # Reduced from 2000ms for better segment breaks
+    }
+
     def transcribe(
         self,
         audio_path: Path,
         language: Optional[str] = None,
         beam_size: int = 5,
         vad_filter: bool = True,
-        word_timestamps: bool = False,
+        word_timestamps: bool = True,
         batch_size: Optional[int] = None,
+        vad_parameters: Optional[dict] = None,
     ) -> Tuple[List[SubtitleSegment], TranscriptionInfo]:
         """
         Transcribe audio file.
@@ -310,8 +317,9 @@ class Transcriber:
             language: Source language code. Auto-detect if None.
             beam_size: Beam search size.
             vad_filter: Enable VAD filtering.
-            word_timestamps: Generate word-level timestamps.
+            word_timestamps: Generate word-level timestamps for better timing.
             batch_size: Batch size for BatchedInferencePipeline.
+            vad_parameters: Custom VAD parameters. Uses optimized defaults if None.
 
         Returns:
             Tuple of (subtitle segments, transcription info).
@@ -323,6 +331,9 @@ class Transcriber:
             raise TranscriptionError(f"Audio file not found: {audio_path}")
 
         logger.info(f"Starting transcription: {audio_path.name}")
+
+        # Use optimized VAD parameters for better subtitle timing
+        vad_params = vad_parameters if vad_parameters is not None else self.DEFAULT_VAD_PARAMETERS
 
         try:
             # Select inference method
@@ -337,6 +348,7 @@ class Transcriber:
                     batch_size=batch_size,
                     vad_filter=vad_filter,
                     word_timestamps=word_timestamps,
+                    vad_parameters=vad_params if vad_filter else None,
                 )
             else:
                 segments_iter, info = self._model.transcribe(
@@ -345,6 +357,7 @@ class Transcriber:
                     beam_size=beam_size,
                     vad_filter=vad_filter,
                     word_timestamps=word_timestamps,
+                    vad_parameters=vad_params if vad_filter else None,
                 )
 
             # Collect all segments
