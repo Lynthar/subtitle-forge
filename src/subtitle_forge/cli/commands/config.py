@@ -39,6 +39,7 @@ def show():
     table.add_row("  Host", config.ollama.host)
     table.add_row("  Temperature", str(config.ollama.temperature))
     table.add_row("  Max Batch Size", str(config.ollama.max_batch_size))
+    table.add_row("  Prompt", "[cyan]Custom[/cyan]" if config.ollama.prompt_template else "[dim]Default[/dim]")
 
     # Output settings
     table.add_row("[bold]Output[/bold]", "")
@@ -403,4 +404,145 @@ def pull_model(
     except Exception as e:
         print_error(f"Download failed: {e}")
         console.print("\n[yellow]You can try again - download will resume from where it stopped.[/yellow]")
+        raise typer.Exit(1)
+
+
+@app.command("show-prompt")
+def show_prompt():
+    """
+    Show current translation prompt template.
+
+    Displays the prompt used for subtitle translation. If a custom prompt
+    is configured, it will be shown; otherwise, the default prompt is displayed.
+
+    Example:
+        subtitle-forge config show-prompt
+    """
+    from ...core.translator import SubtitleTranslator
+
+    config = AppConfig.load()
+
+    if config.ollama.prompt_template:
+        console.print(Panel(
+            "[cyan]Custom Prompt Template[/cyan]\n\n"
+            f"{config.ollama.prompt_template}",
+            title="Translation Prompt",
+            border_style="cyan",
+        ))
+    else:
+        console.print(Panel(
+            "[dim](Using default prompt)[/dim]\n\n"
+            f"{SubtitleTranslator.DEFAULT_PROMPT_TEMPLATE}",
+            title="Translation Prompt",
+            border_style="blue",
+        ))
+
+    console.print("\n[bold]Available placeholders:[/bold]")
+    console.print("  {source_lang}    - Source language name")
+    console.print("  {target_lang}    - Target language name")
+    console.print("  {context_before} - Previous dialogue (for context)")
+    console.print("  {segments}       - Lines to translate")
+    console.print("  {context_after}  - Following dialogue (for context)")
+
+
+@app.command("set-prompt")
+def set_prompt(
+    file: Path = typer.Option(
+        ...,
+        "--file",
+        "-f",
+        help="Path to prompt template file",
+        exists=True,
+    ),
+):
+    """
+    Set custom translation prompt from a file.
+
+    The prompt file should contain the template with placeholders.
+
+    Available placeholders:
+      {source_lang}    - Source language name
+      {target_lang}    - Target language name
+      {context_before} - Previous dialogue (for context)
+      {segments}       - Lines to translate
+      {context_after}  - Following dialogue (for context)
+
+    Example:
+        subtitle-forge config set-prompt --file my_prompt.txt
+    """
+    # Read prompt from file
+    try:
+        prompt_content = file.read_text(encoding="utf-8")
+    except Exception as e:
+        print_error(f"Failed to read file: {e}")
+        raise typer.Exit(1)
+
+    # Validate placeholders
+    required_placeholders = ["{source_lang}", "{target_lang}", "{segments}"]
+    missing = [p for p in required_placeholders if p not in prompt_content]
+    if missing:
+        print_error(f"Missing required placeholders: {', '.join(missing)}")
+        console.print("\n[yellow]Required placeholders:[/yellow]")
+        console.print("  {source_lang} - Source language name")
+        console.print("  {target_lang} - Target language name")
+        console.print("  {segments}    - Lines to translate")
+        raise typer.Exit(1)
+
+    # Save to config
+    config = AppConfig.load()
+    config.ollama.prompt_template = prompt_content
+    config.save()
+
+    print_success(f"Custom prompt loaded from: {file}")
+    console.print(f"\n[dim]Prompt length: {len(prompt_content)} characters[/dim]")
+
+
+@app.command("reset-prompt")
+def reset_prompt():
+    """
+    Reset translation prompt to default.
+
+    Removes any custom prompt and reverts to the built-in default.
+
+    Example:
+        subtitle-forge config reset-prompt
+    """
+    config = AppConfig.load()
+
+    if config.ollama.prompt_template:
+        config.ollama.prompt_template = None
+        config.save()
+        print_success("Translation prompt reset to default")
+    else:
+        print_info("Already using default prompt")
+
+
+@app.command("export-prompt")
+def export_prompt(
+    output: Path = typer.Option(
+        ...,
+        "--output",
+        "-o",
+        help="Output file path",
+    ),
+):
+    """
+    Export current prompt template to a file.
+
+    Exports the current prompt (custom or default) for editing.
+
+    Example:
+        subtitle-forge config export-prompt -o my_prompt.txt
+    """
+    from ...core.translator import SubtitleTranslator
+
+    config = AppConfig.load()
+    prompt = config.ollama.prompt_template or SubtitleTranslator.DEFAULT_PROMPT_TEMPLATE
+
+    try:
+        output.write_text(prompt, encoding="utf-8")
+        print_success(f"Prompt exported to: {output}")
+        console.print("\n[dim]Edit the file and use 'config set-prompt -f <file>' to apply changes[/dim]")
+    except Exception as e:
+        print_error(f"Failed to write file: {e}")
         raise typer.Exit(1)
