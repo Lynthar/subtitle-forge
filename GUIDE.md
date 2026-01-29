@@ -20,6 +20,7 @@
    - [仅翻译](#仅翻译已有字幕)
    - [双语字幕](#双语字幕)
 4. [配置文件](#配置文件)
+   - [翻译提示词配置](#翻译提示词配置)
 5. [故障排查](#故障排查)
 6. [支持的语言](#支持的语言)
 7. [Whisper 模型选择](#whisper-模型选择)
@@ -487,6 +488,78 @@ output:
 max_workers: 2             # 并发处理数
 log_level: INFO            # 日志级别
 ```
+
+### 翻译提示词配置
+
+翻译质量很大程度上取决于发送给 AI 模型的提示词（Prompt）。subtitle-forge 允许你查看和自定义翻译提示词。
+
+#### 查看当前提示词
+
+```bash
+subtitle-forge config show-prompt
+```
+
+这会显示当前使用的翻译提示词模板，并标注是默认模板还是自定义模板。
+
+#### 导出提示词
+
+将当前提示词导出到文件以便编辑:
+
+```bash
+subtitle-forge config export-prompt -o my_prompt.txt
+```
+
+#### 自定义提示词
+
+1. 首先导出默认提示词:
+```bash
+subtitle-forge config export-prompt -o my_prompt.txt
+```
+
+2. 用文本编辑器修改 `my_prompt.txt`
+
+3. 应用自定义提示词:
+```bash
+subtitle-forge config set-prompt -f my_prompt.txt
+```
+
+#### 重置为默认提示词
+
+```bash
+subtitle-forge config reset-prompt
+```
+
+#### 可用占位符
+
+自定义提示词时，必须包含以下占位符（系统会自动替换为实际值）:
+
+| 占位符 | 说明 | 示例值 |
+|--------|------|--------|
+| `{source_lang}` | 源语言名称（必需） | English |
+| `{target_lang}` | 目标语言名称（必需） | Simplified Chinese |
+| `{segments}` | 要翻译的字幕内容（必需） | [1] Hello... |
+| `{context_before}` | 前文上下文（可选） | 前 3 条字幕 |
+| `{context_after}` | 后文上下文（可选） | 后 2 条字幕 |
+
+#### 自定义提示词示例
+
+```
+你是专业的影视字幕翻译专家。
+
+翻译要求:
+1. 保持对话的自然流畅
+2. 捕捉角色的情感和语气
+3. 保持字幕简洁，适合阅读
+4. 每行保留 [数字] 前缀
+5. 只输出翻译结果，不要解释
+{context_before}
+将以下字幕从 {source_lang} 翻译成 {target_lang}:
+{segments}
+{context_after}
+翻译结果:
+```
+
+> **提示**: 好的提示词应该明确翻译风格（正式/口语）、目标受众、以及特定领域术语的处理方式。针对不同类型的视频（电影、纪录片、教程等）可以使用不同的提示词。
 
 ---
 

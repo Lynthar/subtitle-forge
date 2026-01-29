@@ -29,6 +29,7 @@ class OllamaConfig:
     temperature: float = 0.3
     max_batch_size: int = 10
     max_retries: int = 3
+    prompt_template: Optional[str] = None  # Custom translation prompt (None = use default)
 
 
 @dataclass
@@ -85,6 +86,15 @@ class AppConfig:
 
         path.parent.mkdir(parents=True, exist_ok=True)
 
+        ollama_data = {
+            "model": self.ollama.model,
+            "host": self.ollama.host,
+            "temperature": self.ollama.temperature,
+            "max_batch_size": self.ollama.max_batch_size,
+        }
+        if self.ollama.prompt_template:
+            ollama_data["prompt_template"] = self.ollama.prompt_template
+
         data = {
             "whisper": {
                 "model": self.whisper.model,
@@ -93,12 +103,7 @@ class AppConfig:
                 "beam_size": self.whisper.beam_size,
                 "vad_filter": self.whisper.vad_filter,
             },
-            "ollama": {
-                "model": self.ollama.model,
-                "host": self.ollama.host,
-                "temperature": self.ollama.temperature,
-                "max_batch_size": self.ollama.max_batch_size,
-            },
+            "ollama": ollama_data,
             "output": {
                 "encoding": self.output.encoding,
                 "keep_original": self.output.keep_original,
@@ -117,6 +122,15 @@ class AppConfig:
 
     def to_dict(self) -> dict:
         """Convert config to dictionary."""
+        ollama_dict = {
+            "model": self.ollama.model,
+            "host": self.ollama.host,
+            "temperature": self.ollama.temperature,
+            "max_batch_size": self.ollama.max_batch_size,
+        }
+        if self.ollama.prompt_template:
+            ollama_dict["prompt_template"] = self.ollama.prompt_template
+
         return {
             "whisper": {
                 "model": self.whisper.model,
@@ -125,12 +139,7 @@ class AppConfig:
                 "beam_size": self.whisper.beam_size,
                 "vad_filter": self.whisper.vad_filter,
             },
-            "ollama": {
-                "model": self.ollama.model,
-                "host": self.ollama.host,
-                "temperature": self.ollama.temperature,
-                "max_batch_size": self.ollama.max_batch_size,
-            },
+            "ollama": ollama_dict,
             "output": {
                 "encoding": self.output.encoding,
                 "keep_original": self.output.keep_original,

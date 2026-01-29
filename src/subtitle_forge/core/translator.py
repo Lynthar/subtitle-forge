@@ -24,10 +24,29 @@ class TranslationConfig:
     temperature: float = 0.3
     max_batch_size: int = 10
     max_retries: int = 3
+    prompt_template: Optional[str] = None  # Custom prompt template (None = use default)
 
 
 class SubtitleTranslator:
     """Subtitle translator using Ollama LLM."""
+
+    # Default translation prompt template
+    # Available placeholders: {source_lang}, {target_lang}, {context_before}, {segments}, {context_after}
+    DEFAULT_PROMPT_TEMPLATE = """You are an expert subtitle translator for movies and TV dramas.
+
+TRANSLATION GUIDELINES:
+1. Preserve natural dialogue flow and conversational tone
+2. Capture emotional nuance, character voice, and speaker intent
+3. Use appropriate register (formal/informal) based on context
+4. Keep translations concise for subtitle readability
+5. Maintain consistency with surrounding dialogue
+6. Preserve the [number] prefix for each line
+7. Output ONLY the translated lines, no explanations
+{context_before}
+TRANSLATE THESE LINES from {source_lang} to {target_lang}:
+{segments}
+{context_after}
+Translated subtitles:"""
 
     LANGUAGE_NAMES = {
         "zh": "Simplified Chinese",
@@ -137,6 +156,10 @@ class SubtitleTranslator:
         """Check if Ollama model is available."""
         return self.model_manager.is_model_available(self.config.model)
 
+    def get_prompt_template(self) -> str:
+        """Get the current prompt template (custom or default)."""
+        return self.config.prompt_template or self.DEFAULT_PROMPT_TEMPLATE
+
     def _build_translation_prompt(
         self,
         segments: List[SubtitleSegment],
@@ -161,44 +184,35 @@ class SubtitleTranslator:
         source_name = self.LANGUAGE_NAMES.get(source_lang, source_lang)
         target_name = self.LANGUAGE_NAMES.get(target_lang, target_lang)
 
-        prompt_parts = []
-
-        # Enhanced system instruction optimized for movies/TV dramas
-        prompt_parts.append(f"""You are an expert subtitle translator for movies and TV dramas.
-
-TRANSLATION GUIDELINES:
-1. Preserve natural dialogue flow and conversational tone
-2. Capture emotional nuance, character voice, and speaker intent
-3. Use appropriate register (formal/informal) based on context
-4. Keep translations concise for subtitle readability
-5. Maintain consistency with surrounding dialogue
-6. Preserve the [number] prefix for each line
-7. Output ONLY the translated lines, no explanations""")
-
-        # Add previous context if available
+        # Format context sections
+        context_before_text = ""
         if context_before:
             context_lines = [f"  [{seg.index}] {seg.text}" for seg in context_before[-3:]]
-            prompt_parts.append(f"""
+            context_before_text = f"""
 PREVIOUS DIALOGUE (for context, DO NOT translate):
-{chr(10).join(context_lines)}""")
+{chr(10).join(context_lines)}"""
 
-        # Main segments to translate
-        lines = [f"[{seg.index}] {seg.text}" for seg in segments]
-        prompt_parts.append(f"""
-TRANSLATE THESE LINES from {source_name} to {target_name}:
-{chr(10).join(lines)}""")
-
-        # Add following context if available
+        context_after_text = ""
         if context_after:
             context_lines = [f"  [{seg.index}] {seg.text}" for seg in context_after[:2]]
-            prompt_parts.append(f"""
+            context_after_text = f"""
 FOLLOWING DIALOGUE (for context, DO NOT translate):
-{chr(10).join(context_lines)}""")
+{chr(10).join(context_lines)}"""
 
-        prompt_parts.append("""
-Translated subtitles:""")
+        # Format segments
+        lines = [f"[{seg.index}] {seg.text}" for seg in segments]
+        segments_text = chr(10).join(lines)
 
-        return "\n".join(prompt_parts)
+        # Use custom template or default
+        template = self.get_prompt_template()
+
+        return template.format(
+            source_lang=source_name,
+            target_lang=target_name,
+            context_before=context_before_text,
+            segments=segments_text,
+            context_after=context_after_text,
+        )
 
     def _parse_translation_response(
         self,
