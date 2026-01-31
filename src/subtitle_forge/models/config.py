@@ -18,6 +18,9 @@ class WhisperConfig:
     vad_filter: bool = True
     batch_size: Optional[int] = None
     download_root: Optional[str] = None
+    # VAD parameters for subtitle timing optimization
+    speech_pad_ms: int = 100  # Padding around detected speech (ms)
+    min_silence_duration_ms: int = 500  # Minimum silence duration for segment breaks (ms)
 
 
 @dataclass
@@ -30,6 +33,7 @@ class OllamaConfig:
     max_batch_size: int = 10
     max_retries: int = 3
     prompt_template: Optional[str] = None  # Custom translation prompt (None = use default)
+    prompt_template_id: Optional[str] = None  # Reference to prompt library template
 
 
 @dataclass
@@ -94,6 +98,8 @@ class AppConfig:
         }
         if self.ollama.prompt_template:
             ollama_data["prompt_template"] = self.ollama.prompt_template
+        if self.ollama.prompt_template_id:
+            ollama_data["prompt_template_id"] = self.ollama.prompt_template_id
 
         data = {
             "whisper": {
@@ -102,6 +108,8 @@ class AppConfig:
                 "compute_type": self.whisper.compute_type,
                 "beam_size": self.whisper.beam_size,
                 "vad_filter": self.whisper.vad_filter,
+                "speech_pad_ms": self.whisper.speech_pad_ms,
+                "min_silence_duration_ms": self.whisper.min_silence_duration_ms,
             },
             "ollama": ollama_data,
             "output": {
@@ -130,6 +138,8 @@ class AppConfig:
         }
         if self.ollama.prompt_template:
             ollama_dict["prompt_template"] = self.ollama.prompt_template
+        if self.ollama.prompt_template_id:
+            ollama_dict["prompt_template_id"] = self.ollama.prompt_template_id
 
         return {
             "whisper": {
@@ -138,6 +148,8 @@ class AppConfig:
                 "compute_type": self.whisper.compute_type,
                 "beam_size": self.whisper.beam_size,
                 "vad_filter": self.whisper.vad_filter,
+                "speech_pad_ms": self.whisper.speech_pad_ms,
+                "min_silence_duration_ms": self.whisper.min_silence_duration_ms,
             },
             "ollama": ollama_dict,
             "output": {
