@@ -1,10 +1,21 @@
 """Speech recognition module using faster-whisper and WhisperX."""
 
+# =============================================================================
+# CRITICAL: PyTorch 2.6+ compatibility fix for WhisperX/pyannote-audio
+# MUST be set BEFORE any imports that might load torch (including faster_whisper)
+#
+# PyTorch 2.6 changed torch.load() default from weights_only=False to weights_only=True
+# This breaks loading pyannote-audio models which contain omegaconf configuration objects
+# Reference: https://github.com/m-bain/whisperX/issues/1304
+#            https://github.com/pyannote/pyannote-audio/issues/1908
+# =============================================================================
+import os
+os.environ.setdefault('TORCH_FORCE_NO_WEIGHTS_ONLY_LOAD', '1')
+
 from pathlib import Path
 from typing import Optional, List, Tuple, Callable
 from dataclasses import dataclass
 import logging
-import os
 
 from faster_whisper import WhisperModel, BatchedInferencePipeline
 
@@ -13,65 +24,6 @@ from ..utils.gpu import get_optimal_compute_type, get_available_vram
 from ..exceptions import TranscriptionError
 
 logger = logging.getLogger(__name__)
-
-# Fix for PyTorch 2.6+ weights_only security change before importing whisperx
-# PyTorch 2.6 changed torch.load() default from weights_only=False to weights_only=True
-# This breaks loading pyannote-audio models which contain omegaconf configuration objects
-# Reference: https://github.com/m-bain/whisperX/issues/1304
-#            https://github.com/pyannote/pyannote-audio/issues/1908
-
-def _setup_pytorch_whisperx_compatibility():
-    """
-    Fix PyTorch 2.6+ compatibility issues with WhisperX/pyannote-audio.
-
-    Three approaches (in order of reliability):
-    1. Environment variable TORCH_FORCE_NO_WEIGHTS_ONLY_LOAD=1
-    2. Monkey-patch torch.load to use weights_only=False
-    3. Add omegaconf classes to safe_globals (may miss some classes)
-
-    We use approach #2 (monkey-patch) as it's reliable and doesn't require
-    setting environment variables before Python starts.
-    """
-    try:
-        import torch
-
-        # Check if we're on PyTorch 2.6+ which has the weights_only default change
-        version_str = torch.__version__.split('+')[0]
-        parts = version_str.split('.')
-        major = int(parts[0])
-        minor = int(parts[1]) if len(parts) > 1 else 0
-
-        if major < 2 or (major == 2 and minor < 6):
-            return  # PyTorch < 2.6, no fix needed
-
-        # Check if already fixed via environment variable
-        if os.environ.get('TORCH_FORCE_NO_WEIGHTS_ONLY_LOAD') == '1':
-            logger.debug("PyTorch weights_only fix already applied via environment variable")
-            return
-
-        # Approach: Monkey-patch torch.load to default weights_only=False for pyannote models
-        # This is the most reliable fix as it doesn't require knowing all omegaconf classes
-        _original_torch_load = torch.load
-
-        def _patched_torch_load(*args, **kwargs):
-            """
-            Patched torch.load that defaults to weights_only=False.
-
-            This is needed because pyannote-audio checkpoints contain omegaconf
-            configuration objects that are not in PyTorch's safe globals list.
-            """
-            # Only override if weights_only is not explicitly specified
-            if 'weights_only' not in kwargs:
-                kwargs['weights_only'] = False
-            return _original_torch_load(*args, **kwargs)
-
-        torch.load = _patched_torch_load
-        logger.debug("Applied PyTorch weights_only monkey-patch for WhisperX/pyannote compatibility")
-
-    except Exception as e:
-        logger.warning(f"Failed to apply PyTorch compatibility fix: {e}")
-
-_setup_pytorch_whisperx_compatibility()
 
 # Check if WhisperX is available
 WHISPERX_AVAILABLE = False
