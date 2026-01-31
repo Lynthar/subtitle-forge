@@ -15,63 +15,63 @@ from ..exceptions import TranscriptionError
 logger = logging.getLogger(__name__)
 
 # Fix for PyTorch 2.6+ weights_only security change before importing whisperx
-# This must be done before any model loading (pyannote-audio uses omegaconf)
-def _setup_pytorch_omegaconf_compatibility():
-    """Add omegaconf classes to PyTorch safe globals for model loading."""
+# PyTorch 2.6 changed torch.load() default from weights_only=False to weights_only=True
+# This breaks loading pyannote-audio models which contain omegaconf configuration objects
+# Reference: https://github.com/m-bain/whisperX/issues/1304
+#            https://github.com/pyannote/pyannote-audio/issues/1908
+
+def _setup_pytorch_whisperx_compatibility():
+    """
+    Fix PyTorch 2.6+ compatibility issues with WhisperX/pyannote-audio.
+
+    Three approaches (in order of reliability):
+    1. Environment variable TORCH_FORCE_NO_WEIGHTS_ONLY_LOAD=1
+    2. Monkey-patch torch.load to use weights_only=False
+    3. Add omegaconf classes to safe_globals (may miss some classes)
+
+    We use approach #2 (monkey-patch) as it's reliable and doesn't require
+    setting environment variables before Python starts.
+    """
     try:
         import torch
-        if not hasattr(torch.serialization, 'add_safe_globals'):
-            return  # Older PyTorch version
 
-        import omegaconf
+        # Check if we're on PyTorch 2.6+ which has the weights_only default change
+        version_str = torch.__version__.split('+')[0]
+        parts = version_str.split('.')
+        major = int(parts[0])
+        minor = int(parts[1]) if len(parts) > 1 else 0
 
-        safe_globals = []
+        if major < 2 or (major == 2 and minor < 6):
+            return  # PyTorch < 2.6, no fix needed
 
-        # Add all classes from omegaconf that might be serialized
-        # Main classes
-        for cls_name in ['DictConfig', 'ListConfig', 'OmegaConf', 'MISSING', 'MissingMandatoryValue']:
-            if hasattr(omegaconf, cls_name):
-                obj = getattr(omegaconf, cls_name)
-                if isinstance(obj, type):
-                    safe_globals.append(obj)
+        # Check if already fixed via environment variable
+        if os.environ.get('TORCH_FORCE_NO_WEIGHTS_ONLY_LOAD') == '1':
+            logger.debug("PyTorch weights_only fix already applied via environment variable")
+            return
 
-        # Classes from omegaconf.base
-        try:
-            from omegaconf import base
-            for cls_name in ['ContainerMetadata', 'Metadata', 'Node', 'Container', 'SCMode', 'DictKeyType']:
-                if hasattr(base, cls_name):
-                    obj = getattr(base, cls_name)
-                    if isinstance(obj, type):
-                        safe_globals.append(obj)
-        except ImportError:
-            pass
+        # Approach: Monkey-patch torch.load to default weights_only=False for pyannote models
+        # This is the most reliable fix as it doesn't require knowing all omegaconf classes
+        _original_torch_load = torch.load
 
-        # Classes from omegaconf.nodes
-        try:
-            from omegaconf import nodes
-            for cls_name in ['ValueNode', 'AnyNode', 'StringNode', 'IntegerNode', 'FloatNode', 'BooleanNode', 'EnumNode', 'InterpolationResultNode']:
-                if hasattr(nodes, cls_name):
-                    obj = getattr(nodes, cls_name)
-                    if isinstance(obj, type):
-                        safe_globals.append(obj)
-        except ImportError:
-            pass
+        def _patched_torch_load(*args, **kwargs):
+            """
+            Patched torch.load that defaults to weights_only=False.
 
-        # Direct imports for classes that might be serialized by full path
-        try:
-            from omegaconf.listconfig import ListConfig as LC
-            from omegaconf.dictconfig import DictConfig as DC
-            safe_globals.extend([LC, DC])
-        except ImportError:
-            pass
+            This is needed because pyannote-audio checkpoints contain omegaconf
+            configuration objects that are not in PyTorch's safe globals list.
+            """
+            # Only override if weights_only is not explicitly specified
+            if 'weights_only' not in kwargs:
+                kwargs['weights_only'] = False
+            return _original_torch_load(*args, **kwargs)
 
-        if safe_globals:
-            torch.serialization.add_safe_globals(safe_globals)
+        torch.load = _patched_torch_load
+        logger.debug("Applied PyTorch weights_only monkey-patch for WhisperX/pyannote compatibility")
 
-    except ImportError:
-        pass  # omegaconf not installed
+    except Exception as e:
+        logger.warning(f"Failed to apply PyTorch compatibility fix: {e}")
 
-_setup_pytorch_omegaconf_compatibility()
+_setup_pytorch_whisperx_compatibility()
 
 # Check if WhisperX is available
 WHISPERX_AVAILABLE = False
@@ -80,6 +80,25 @@ try:
     WHISPERX_AVAILABLE = True
 except ImportError:
     pass
+
+
+def _should_use_whisperx(use_whisperx: bool) -> bool:
+    """
+    Determine if WhisperX should be used based on availability.
+
+    Args:
+        use_whisperx: User's preference for using WhisperX.
+
+    Returns:
+        True if WhisperX should be used.
+    """
+    if not use_whisperx:
+        return False
+
+    if not WHISPERX_AVAILABLE:
+        return False
+
+    return True
 
 # Model name to HuggingFace repo mapping
 WHISPER_HF_REPOS = {
@@ -167,9 +186,11 @@ class Transcriber:
         self.device = device
         self.compute_type = compute_type or get_optimal_compute_type(device)
         self.download_root = download_root
-        self.use_whisperx = use_whisperx and WHISPERX_AVAILABLE
         self.whisperx_align = whisperx_align
         self.hf_token = hf_token
+
+        # Determine if WhisperX should be used
+        self.use_whisperx = _should_use_whisperx(use_whisperx)
 
         if use_whisperx and not WHISPERX_AVAILABLE:
             logger.warning(
@@ -606,7 +627,7 @@ class Transcriber:
             # Apply post-processing
             if post_process:
                 segments = self._apply_post_processing(
-                    segments, audio_duration, timestamp_config
+                    segments, audio_duration, timestamp_config, audio_path
                 )
 
             logger.info(
@@ -710,7 +731,7 @@ class Transcriber:
             # Apply post-processing
             if post_process:
                 segments = self._apply_post_processing(
-                    segments, audio_duration, timestamp_config
+                    segments, audio_duration, timestamp_config, audio_path
                 )
 
             logger.info(
@@ -729,6 +750,7 @@ class Transcriber:
         segments: List[SubtitleSegment],
         audio_duration: float,
         timestamp_config: Optional[dict] = None,
+        audio_path: Optional[Path] = None,
     ) -> List[SubtitleSegment]:
         """Apply timestamp post-processing."""
         from .timestamp_processor import TimestampProcessor
