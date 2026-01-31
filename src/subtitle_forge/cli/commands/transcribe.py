@@ -49,7 +49,7 @@ def transcribe_video(
     use_whisperx: Optional[bool] = typer.Option(
         None,
         "--whisperx/--no-whisperx",
-        help="Use WhisperX for better timestamp accuracy (default: from config)",
+        help="Use WhisperX for better timestamp accuracy",
     ),
     post_process: bool = typer.Option(
         True,
