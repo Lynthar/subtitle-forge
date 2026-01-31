@@ -39,7 +39,14 @@ def show():
     table.add_row("  Host", config.ollama.host)
     table.add_row("  Temperature", str(config.ollama.temperature))
     table.add_row("  Max Batch Size", str(config.ollama.max_batch_size))
-    table.add_row("  Prompt", "[cyan]Custom[/cyan]" if config.ollama.prompt_template else "[dim]Default[/dim]")
+    # Show prompt source (custom > library > default)
+    if config.ollama.prompt_template:
+        prompt_info = "[cyan]Custom[/cyan]"
+    elif config.ollama.prompt_template_id:
+        prompt_info = f"[cyan]Library: {config.ollama.prompt_template_id}[/cyan]"
+    else:
+        prompt_info = "[dim]Default[/dim]"
+    table.add_row("  Prompt", prompt_info)
 
     # Output settings
     table.add_row("[bold]Output[/bold]", "")
@@ -543,6 +550,292 @@ def export_prompt(
         output.write_text(prompt, encoding="utf-8")
         print_success(f"Prompt exported to: {output}")
         console.print("\n[dim]Edit the file and use 'config set-prompt -f <file>' to apply changes[/dim]")
+    except Exception as e:
+        print_error(f"Failed to write file: {e}")
+        raise typer.Exit(1)
+
+
+# ========== Prompt Library Commands ==========
+
+
+@app.command("list-prompts")
+def list_prompts(
+    genre: Optional[str] = typer.Option(
+        None,
+        "--genre",
+        "-g",
+        help="Filter by genre (movie, documentary, anime, etc.)",
+    ),
+):
+    """
+    List all available prompt templates.
+
+    Shows built-in and user-defined templates from the prompt library.
+
+    Example:
+        subtitle-forge config list-prompts
+        subtitle-forge config list-prompts --genre movie
+    """
+    from ...core.prompt_library import get_prompt_library
+
+    library = get_prompt_library()
+    templates = library.list_templates(genre=genre)
+
+    if not templates:
+        if genre:
+            print_info(f"No templates found for genre: {genre}")
+        else:
+            print_info("No templates found")
+        return
+
+    # Create table
+    table = Table(title="Available Prompt Templates")
+    table.add_column("ID", style="cyan")
+    table.add_column("Name", style="green")
+    table.add_column("Description")
+    table.add_column("Genre", style="dim")
+    table.add_column("Source", style="dim")
+
+    for t in templates:
+        source = "[dim]builtin[/dim]" if library.is_builtin(t.id) else "[cyan]user[/cyan]"
+        table.add_row(t.id, t.name, t.description, t.genre, source)
+
+    console.print(table)
+
+    # Show available genres
+    genres = library.get_genres()
+    console.print(f"\n[dim]Available genres: {', '.join(genres)}[/dim]")
+    console.print("[dim]Use: subtitle-forge config use-prompt <template-id>[/dim]")
+
+
+@app.command("show-prompt-template")
+def show_prompt_template(
+    template_id: str = typer.Argument(..., help="Template ID to display"),
+):
+    """
+    Show details of a specific prompt template.
+
+    Example:
+        subtitle-forge config show-prompt-template movie-scifi
+    """
+    from ...core.prompt_library import get_prompt_library
+
+    library = get_prompt_library()
+    template = library.get_template(template_id)
+
+    if not template:
+        print_error(f"Template not found: {template_id}")
+        console.print("\n[dim]Use 'config list-prompts' to see available templates[/dim]")
+        raise typer.Exit(1)
+
+    # Determine source
+    source = "Built-in" if library.is_builtin(template_id) else "User-defined"
+
+    console.print(Panel(
+        f"[bold]ID:[/bold] {template.id}\n"
+        f"[bold]Name:[/bold] {template.name}\n"
+        f"[bold]Genre:[/bold] {template.genre}\n"
+        f"[bold]Tags:[/bold] {', '.join(template.tags) if template.tags else 'None'}\n"
+        f"[bold]Source:[/bold] {source}\n\n"
+        f"[bold]Description:[/bold]\n{template.description}\n\n"
+        f"[bold]Template:[/bold]\n[dim]{template.template}[/dim]",
+        title=f"Prompt Template: {template.name}",
+        border_style="cyan",
+    ))
+
+
+@app.command("use-prompt")
+def use_prompt(
+    template_id: str = typer.Argument(..., help="Template ID to use"),
+):
+    """
+    Set the prompt template from library.
+
+    Example:
+        subtitle-forge config use-prompt movie-scifi
+        subtitle-forge config use-prompt documentary
+    """
+    from ...core.prompt_library import get_prompt_library
+
+    library = get_prompt_library()
+    template = library.get_template(template_id)
+
+    if not template:
+        print_error(f"Template not found: {template_id}")
+        console.print("\n[dim]Use 'config list-prompts' to see available templates[/dim]")
+        raise typer.Exit(1)
+
+    config = AppConfig.load()
+    # Clear custom prompt if set, use library template
+    config.ollama.prompt_template = None
+    config.ollama.prompt_template_id = template_id
+    config.save()
+
+    print_success(f"Now using prompt template: {template.name}")
+    console.print(f"[dim]Description: {template.description}[/dim]")
+
+
+@app.command("save-prompt")
+def save_prompt(
+    file: Path = typer.Option(
+        ...,
+        "--file",
+        "-f",
+        help="Path to prompt template file",
+        exists=True,
+    ),
+    id: str = typer.Option(
+        ...,
+        "--id",
+        help="Unique identifier for this template",
+    ),
+    name: str = typer.Option(
+        ...,
+        "--name",
+        "-n",
+        help="Display name for this template",
+    ),
+    description: str = typer.Option(
+        "",
+        "--description",
+        "-d",
+        help="Description of when to use this template",
+    ),
+    genre: str = typer.Option(
+        "custom",
+        "--genre",
+        "-g",
+        help="Genre category (movie, documentary, anime, etc.)",
+    ),
+):
+    """
+    Save a custom prompt template to user library.
+
+    Creates a new template from a file that can be reused later.
+
+    Example:
+        subtitle-forge config save-prompt -f my_prompt.txt --id my-scifi --name "My Sci-Fi"
+    """
+    from ...core.prompt_library import get_prompt_library
+    from ...models.prompt import PromptTemplate
+
+    # Read prompt from file
+    try:
+        prompt_content = file.read_text(encoding="utf-8")
+    except Exception as e:
+        print_error(f"Failed to read file: {e}")
+        raise typer.Exit(1)
+
+    # Create template
+    template = PromptTemplate(
+        id=id,
+        name=name,
+        description=description,
+        template=prompt_content,
+        genre=genre,
+        tags=[],
+        author="user",
+    )
+
+    # Validate
+    if not template.is_valid():
+        missing = template.validate()
+        print_error(f"Invalid template: missing placeholders {', '.join(missing)}")
+        console.print("\n[yellow]Required placeholders:[/yellow]")
+        console.print("  {source_lang} - Source language name")
+        console.print("  {target_lang} - Target language name")
+        console.print("  {segments}    - Lines to translate")
+        raise typer.Exit(1)
+
+    # Save to library
+    library = get_prompt_library()
+    try:
+        file_path = library.save_user_template(template)
+        print_success(f"Template saved: {template.name}")
+        console.print(f"[dim]ID: {template.id}[/dim]")
+        console.print(f"[dim]File: {file_path}[/dim]")
+        console.print(f"\n[dim]Use with: subtitle-forge config use-prompt {template.id}[/dim]")
+    except ValueError as e:
+        print_error(str(e))
+        raise typer.Exit(1)
+
+
+@app.command("delete-prompt")
+def delete_prompt(
+    template_id: str = typer.Argument(..., help="Template ID to delete"),
+):
+    """
+    Delete a user-defined prompt template.
+
+    Only user-created templates can be deleted. Built-in templates cannot be removed.
+
+    Example:
+        subtitle-forge config delete-prompt my-custom-template
+    """
+    from ...core.prompt_library import get_prompt_library
+
+    library = get_prompt_library()
+
+    # Check if built-in
+    if library.is_builtin(template_id):
+        print_error(f"Cannot delete built-in template: {template_id}")
+        raise typer.Exit(1)
+
+    # Check if exists
+    if not library.is_user_defined(template_id):
+        print_error(f"Template not found: {template_id}")
+        raise typer.Exit(1)
+
+    # Confirm deletion
+    if not typer.confirm(f"Delete template '{template_id}'?", default=False):
+        print_info("Cancelled")
+        raise typer.Exit(0)
+
+    # Delete
+    if library.delete_user_template(template_id):
+        print_success(f"Template deleted: {template_id}")
+
+        # Clear from config if it was the active template
+        config = AppConfig.load()
+        if config.ollama.prompt_template_id == template_id:
+            config.ollama.prompt_template_id = None
+            config.save()
+            console.print("[dim]Switched to default prompt template[/dim]")
+    else:
+        print_error("Failed to delete template")
+        raise typer.Exit(1)
+
+
+@app.command("export-prompt-template")
+def export_prompt_template(
+    template_id: str = typer.Argument(..., help="Template ID to export"),
+    output: Path = typer.Option(
+        ...,
+        "--output",
+        "-o",
+        help="Output file path",
+    ),
+):
+    """
+    Export a library template to a file for customization.
+
+    Example:
+        subtitle-forge config export-prompt-template movie-scifi -o my_scifi.txt
+    """
+    from ...core.prompt_library import get_prompt_library
+
+    library = get_prompt_library()
+    template = library.get_template(template_id)
+
+    if not template:
+        print_error(f"Template not found: {template_id}")
+        console.print("\n[dim]Use 'config list-prompts' to see available templates[/dim]")
+        raise typer.Exit(1)
+
+    try:
+        output.write_text(template.template, encoding="utf-8")
+        print_success(f"Template '{template.name}' exported to: {output}")
+        console.print(f"\n[dim]Edit and save with: subtitle-forge config save-prompt -f {output} --id my-{template_id} --name \"My {template.name}\"[/dim]")
     except Exception as e:
         print_error(f"Failed to write file: {e}")
         raise typer.Exit(1)

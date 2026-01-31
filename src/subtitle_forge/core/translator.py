@@ -25,6 +25,7 @@ class TranslationConfig:
     max_batch_size: int = 10
     max_retries: int = 3
     prompt_template: Optional[str] = None  # Custom prompt template (None = use default)
+    prompt_template_id: Optional[str] = None  # Reference to prompt library template
 
 
 class SubtitleTranslator:
@@ -157,8 +158,45 @@ Translated subtitles:"""
         return self.model_manager.is_model_available(self.config.model)
 
     def get_prompt_template(self) -> str:
-        """Get the current prompt template (custom or default)."""
-        return self.config.prompt_template or self.DEFAULT_PROMPT_TEMPLATE
+        """
+        Get the current prompt template with priority:
+        1. Custom prompt template (direct string)
+        2. Library template by ID
+        3. Default template
+        """
+        # Custom prompt takes precedence (backward compatible)
+        if self.config.prompt_template:
+            return self.config.prompt_template
+
+        # Library template by ID
+        if self.config.prompt_template_id:
+            from .prompt_library import get_prompt_library
+
+            library = get_prompt_library()
+            template = library.get_template(self.config.prompt_template_id)
+            if template:
+                return template.template
+            else:
+                logger.warning(
+                    f"Prompt template '{self.config.prompt_template_id}' not found, "
+                    "using default"
+                )
+
+        # Default
+        return self.DEFAULT_PROMPT_TEMPLATE
+
+    def get_prompt_template_info(self) -> Optional[str]:
+        """
+        Get info about current prompt source.
+
+        Returns:
+            String describing prompt source, or None for default.
+        """
+        if self.config.prompt_template:
+            return "custom"
+        if self.config.prompt_template_id:
+            return f"library:{self.config.prompt_template_id}"
+        return None
 
     def _build_translation_prompt(
         self,
