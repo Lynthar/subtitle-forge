@@ -449,6 +449,15 @@ class Transcriber:
 
         logger.info("Using WhisperX for transcription with forced alignment")
 
+        # Fix for PyTorch 2.6+ weights_only security change
+        # WhisperX models use omegaconf which needs to be allowlisted
+        try:
+            from omegaconf import DictConfig, ListConfig
+            torch.serialization.add_safe_globals([DictConfig, ListConfig])
+        except (ImportError, AttributeError):
+            # omegaconf not available or older PyTorch version
+            pass
+
         try:
             # Determine device
             device = self.device
