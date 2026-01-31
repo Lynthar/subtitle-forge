@@ -502,10 +502,10 @@ class Transcriber:
             audio = whisperx.load_audio(str(audio_path))
 
             # Transcribe
+            # Note: WhisperX FasterWhisperPipeline doesn't accept beam_size directly
             result = self._whisperx_model.transcribe(
                 audio,
                 language=language,
-                beam_size=beam_size,
             )
 
             detected_language = result.get("language", language or "en")
