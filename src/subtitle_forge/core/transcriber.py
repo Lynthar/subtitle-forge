@@ -299,6 +299,58 @@ class Transcriber:
         "min_silence_duration_ms": 500,  # Reduced from 2000ms for better segment breaks
     }
 
+    # Preset VAD modes for different use cases
+    VAD_PRESETS = {
+        "default": {
+            "speech_pad_ms": 100,
+            "min_silence_duration_ms": 500,
+        },
+        "aggressive": {
+            "speech_pad_ms": 50,
+            "min_silence_duration_ms": 300,
+        },
+        "relaxed": {
+            "speech_pad_ms": 200,
+            "min_silence_duration_ms": 800,
+        },
+        "precise": {
+            "speech_pad_ms": 30,
+            "min_silence_duration_ms": 200,
+        },
+    }
+
+    @classmethod
+    def get_vad_parameters(
+        cls,
+        mode: Optional[str] = None,
+        speech_pad_ms: Optional[int] = None,
+        min_silence_duration_ms: Optional[int] = None,
+    ) -> dict:
+        """
+        Get VAD parameters based on mode or custom values.
+
+        Args:
+            mode: Preset mode name ("default", "aggressive", "relaxed", "precise").
+            speech_pad_ms: Custom speech padding (overrides mode).
+            min_silence_duration_ms: Custom min silence duration (overrides mode).
+
+        Returns:
+            VAD parameters dictionary.
+        """
+        # Start with default or mode preset
+        if mode and mode in cls.VAD_PRESETS:
+            params = cls.VAD_PRESETS[mode].copy()
+        else:
+            params = cls.DEFAULT_VAD_PARAMETERS.copy()
+
+        # Override with custom values if provided
+        if speech_pad_ms is not None:
+            params["speech_pad_ms"] = speech_pad_ms
+        if min_silence_duration_ms is not None:
+            params["min_silence_duration_ms"] = min_silence_duration_ms
+
+        return params
+
     def transcribe(
         self,
         audio_path: Path,

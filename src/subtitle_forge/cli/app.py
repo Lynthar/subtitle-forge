@@ -129,6 +129,29 @@ def process(
         "--bilingual",
         help="Generate bilingual subtitles",
     ),
+    # VAD options for subtitle timing
+    vad_mode: Optional[str] = typer.Option(
+        None,
+        "--vad-mode",
+        help="VAD preset mode: default, aggressive, relaxed, precise",
+    ),
+    speech_pad: Optional[int] = typer.Option(
+        None,
+        "--speech-pad",
+        help="Speech padding in milliseconds (overrides vad-mode)",
+    ),
+    min_silence: Optional[int] = typer.Option(
+        None,
+        "--min-silence",
+        help="Minimum silence duration in ms for segment breaks (overrides vad-mode)",
+    ),
+    # Prompt template option
+    prompt_template: Optional[str] = typer.Option(
+        None,
+        "--prompt-template",
+        "-p",
+        help="Prompt template ID from library (use 'config list-prompts' to see available)",
+    ),
 ):
     """
     Process a video: extract audio -> transcribe -> translate -> save subtitles
@@ -158,9 +181,19 @@ def process(
         cfg.whisper.model = whisper_model
     if ollama_model:
         cfg.ollama.model = ollama_model
+    if prompt_template:
+        cfg.ollama.prompt_template_id = prompt_template
 
     output_dir = output_dir or video.parent
     progress = SubtitleProgress()
+
+    # Build VAD parameters
+    from ..core.transcriber import Transcriber as TranscriberClass
+    vad_params = TranscriberClass.get_vad_parameters(
+        mode=vad_mode,
+        speech_pad_ms=speech_pad,
+        min_silence_duration_ms=min_silence,
+    )
 
     try:
         # ========== Phase 1: Prepare models (outside main progress bar) ==========
@@ -223,6 +256,8 @@ def process(
                 host=cfg.ollama.host,
                 temperature=cfg.ollama.temperature,
                 max_batch_size=cfg.ollama.max_batch_size,
+                prompt_template=cfg.ollama.prompt_template,
+                prompt_template_id=cfg.ollama.prompt_template_id,
             )
         )
 
@@ -277,6 +312,7 @@ def process(
                 language=source_lang,
                 beam_size=cfg.whisper.beam_size,
                 vad_filter=cfg.whisper.vad_filter,
+                vad_parameters=vad_params,
             )
             detected_lang = info.language
             tracker.update("[2/4] Transcription complete")

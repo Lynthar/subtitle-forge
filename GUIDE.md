@@ -21,6 +21,8 @@
    - [双语字幕](#双语字幕)
 4. [配置文件](#配置文件)
    - [翻译提示词配置](#翻译提示词配置)
+   - [提示词库](#提示词库)
+   - [字幕时间轴调整](#字幕时间轴调整)
 5. [故障排查](#故障排查)
 6. [支持的语言](#支持的语言)
 7. [Whisper 模型选择](#whisper-模型选择)
@@ -560,6 +562,118 @@ subtitle-forge config reset-prompt
 ```
 
 > **提示**: 好的提示词应该明确翻译风格（正式/口语）、目标受众、以及特定领域术语的处理方式。针对不同类型的视频（电影、纪录片、教程等）可以使用不同的提示词。
+
+### 提示词库
+
+subtitle-forge 内置了多种预设的翻译提示词模板，适用于不同类型的视频内容。
+
+#### 查看可用模板
+
+```bash
+# 列出所有模板
+subtitle-forge config list-prompts
+
+# 按类型筛选
+subtitle-forge config list-prompts --genre movie
+```
+
+#### 内置模板
+
+| 模板 ID | 名称 | 适用场景 |
+|---------|------|----------|
+| `movie-general` | 通用电影 | 大多数电影和电视剧 |
+| `movie-scifi` | 科幻电影 | 科幻、太空、未来科技题材 |
+| `movie-fantasy` | 奇幻电影 | 魔法、奇幻、神话题材 |
+| `movie-historical` | 历史题材 | 历史、古装、战争题材 |
+| `movie-drama` | 现实剧情 | 现实题材、家庭、情感剧 |
+| `documentary` | 纪录片 | 纪录片、科教片 |
+| `anime` | 动漫 | 日本动漫、动画 |
+| `adult` | 成人内容 | 成人影视内容 |
+| `technical` | 技术教程 | 编程、软件、技术教程 |
+| `news` | 新闻报道 | 新闻、时事报道 |
+
+#### 使用模板
+
+```bash
+# 设置默认使用的模板
+subtitle-forge config use-prompt movie-scifi
+
+# 处理时指定模板（不改变默认设置）
+subtitle-forge process video.mp4 -t zh --prompt-template anime
+```
+
+#### 查看模板详情
+
+```bash
+subtitle-forge config show-prompt-template movie-scifi
+```
+
+#### 自定义模板
+
+基于现有模板创建自定义版本：
+
+```bash
+# 1. 导出模板
+subtitle-forge config export-prompt-template movie-scifi -o my_scifi.txt
+
+# 2. 编辑 my_scifi.txt
+
+# 3. 保存为新模板
+subtitle-forge config save-prompt -f my_scifi.txt --id my-scifi --name "我的科幻模板"
+
+# 4. 使用新模板
+subtitle-forge config use-prompt my-scifi
+```
+
+#### 删除自定义模板
+
+```bash
+subtitle-forge config delete-prompt my-scifi
+```
+
+> **注意**: 只能删除用户自定义的模板，内置模板无法删除。
+
+---
+
+### 字幕时间轴调整
+
+如果字幕与对话时间不够精确，可以调整 VAD（语音活动检测）参数。
+
+#### 预设模式
+
+```bash
+# 默认模式（适合大多数视频）
+subtitle-forge process video.mp4 -t zh --vad-mode default
+
+# 紧凑模式（快节奏对话，如动作片）
+subtitle-forge process video.mp4 -t zh --vad-mode aggressive
+
+# 宽松模式（慢节奏，如纪录片）
+subtitle-forge process video.mp4 -t zh --vad-mode relaxed
+
+# 精确模式（技术视频，需要精确同步）
+subtitle-forge process video.mp4 -t zh --vad-mode precise
+```
+
+#### VAD 模式参数
+
+| 模式 | speech_pad (ms) | min_silence (ms) | 适用场景 |
+|------|-----------------|------------------|----------|
+| `default` | 100 | 500 | 一般电影/电视 |
+| `aggressive` | 50 | 300 | 快节奏对话 |
+| `relaxed` | 200 | 800 | 慢节奏/纪录片 |
+| `precise` | 30 | 200 | 技术视频/精确同步 |
+
+#### 自定义参数
+
+```bash
+# 手动设置 VAD 参数
+subtitle-forge process video.mp4 -t zh --speech-pad 80 --min-silence 400
+```
+
+参数说明：
+- `--speech-pad`: 语音前后的填充时间（毫秒）。减小此值可使字幕更紧贴对话。
+- `--min-silence`: 最小静音时长（毫秒）。减小此值可创建更多、更短的字幕段落。
 
 ---
 
