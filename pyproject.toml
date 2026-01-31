@@ -41,6 +41,9 @@ dev = [
     "ruff>=0.1.0",
     "mypy>=1.0.0",
 ]
+whisperx = [
+    "whisperx>=3.1.0",
+]
 
 [project.scripts]
 subtitle-forge = "subtitle_forge.cli.app:cli"

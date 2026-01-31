@@ -147,7 +147,19 @@ def batch_process(
         model_name=config.whisper.model,
         device=config.whisper.device,
         compute_type=config.whisper.compute_type,
+        use_whisperx=config.whisper.use_whisperx,
+        whisperx_align=config.whisper.whisperx_align,
+        hf_token=config.whisper.hf_token,
     )
+
+    # Build timestamp config
+    timestamp_config = {
+        "min_duration": config.timestamp.min_duration,
+        "max_duration": config.timestamp.max_duration,
+        "min_gap": config.timestamp.min_gap,
+        "max_gap_warning": config.timestamp.max_gap_warning,
+        "chars_per_second": config.timestamp.chars_per_second,
+    } if config.timestamp.enabled else None
     translator = SubtitleTranslator(
         TranslationConfig(
             model=config.ollama.model,
@@ -169,6 +181,8 @@ def batch_process(
                 audio_path,
                 beam_size=config.whisper.beam_size,
                 vad_filter=config.whisper.vad_filter,
+                post_process=config.timestamp.enabled,
+                timestamp_config=timestamp_config,
             )
             task.source_lang = info.language
 
