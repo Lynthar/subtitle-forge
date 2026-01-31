@@ -46,6 +46,16 @@ def transcribe_video(
         "--auto-model",
         help="Auto-select model based on GPU VRAM",
     ),
+    use_whisperx: Optional[bool] = typer.Option(
+        None,
+        "--whisperx/--no-whisperx",
+        help="Use WhisperX for better timestamp accuracy (default: from config)",
+    ),
+    post_process: bool = typer.Option(
+        True,
+        "--post-process/--no-post-process",
+        help="Enable timestamp post-processing to fix timing issues",
+    ),
 ):
     """
     Transcribe video audio to subtitles (no translation).
@@ -76,11 +86,21 @@ def transcribe_video(
     try:
         # ========== Phase 1: Prepare model (outside main progress bar) ==========
 
+        # Determine WhisperX usage
+        whisperx_enabled = use_whisperx if use_whisperx is not None else config.whisper.use_whisperx
+
         transcriber = Transcriber(
             model_name=model_name,
             device=config.whisper.device,
             compute_type=config.whisper.compute_type,
+            use_whisperx=whisperx_enabled,
+            whisperx_align=config.whisper.whisperx_align,
+            hf_token=config.whisper.hf_token,
         )
+
+        # Log which backend will be used
+        if transcriber.use_whisperx:
+            print_info("Using WhisperX for improved timestamp accuracy")
 
         # Check and download Whisper model if needed (separate progress bar)
         if not transcriber.is_model_cached():
@@ -137,12 +157,24 @@ def transcribe_video(
 
             # 2. Transcribe (model already prepared)
             tracker.set_description("Transcribing...")
+
+            # Build timestamp config from settings
+            timestamp_config = {
+                "min_duration": config.timestamp.min_duration,
+                "max_duration": config.timestamp.max_duration,
+                "min_gap": config.timestamp.min_gap,
+                "max_gap_warning": config.timestamp.max_gap_warning,
+                "chars_per_second": config.timestamp.chars_per_second,
+            } if post_process and config.timestamp.enabled else None
+
             segments, info = transcriber.transcribe(
                 audio_path,
                 language=language,
                 beam_size=config.whisper.beam_size,
                 vad_filter=vad_filter,
                 batch_size=batch_size,
+                post_process=post_process and config.timestamp.enabled,
+                timestamp_config=timestamp_config,
             )
             tracker.update("Transcription complete")
 

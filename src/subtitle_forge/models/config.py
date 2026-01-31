@@ -8,6 +8,18 @@ import yaml
 
 
 @dataclass
+class TimestampConfig:
+    """Timestamp post-processing configuration."""
+
+    enabled: bool = True  # Enable timestamp post-processing
+    min_duration: float = 0.5  # Minimum subtitle duration (seconds)
+    max_duration: float = 8.0  # Maximum subtitle duration (seconds)
+    min_gap: float = 0.05  # Minimum gap between subtitles (seconds)
+    max_gap_warning: float = 2.0  # Gap threshold for missed speech warning (seconds)
+    chars_per_second: float = 15.0  # Reading speed for duration estimation
+
+
+@dataclass
 class WhisperConfig:
     """Whisper transcription configuration."""
 
@@ -21,6 +33,10 @@ class WhisperConfig:
     # VAD parameters for subtitle timing optimization
     speech_pad_ms: int = 100  # Padding around detected speech (ms)
     min_silence_duration_ms: int = 500  # Minimum silence duration for segment breaks (ms)
+    # WhisperX options
+    use_whisperx: bool = True  # Use WhisperX for better timestamp accuracy
+    whisperx_align: bool = True  # Enable forced alignment with wav2vec2
+    hf_token: Optional[str] = None  # HuggingFace token for pyannote models
 
 
 @dataclass
@@ -53,6 +69,7 @@ class AppConfig:
     whisper: WhisperConfig = field(default_factory=WhisperConfig)
     ollama: OllamaConfig = field(default_factory=OllamaConfig)
     output: OutputConfig = field(default_factory=OutputConfig)
+    timestamp: TimestampConfig = field(default_factory=TimestampConfig)
     max_workers: int = 2
     log_level: str = "INFO"
     log_file: Optional[str] = None
@@ -78,6 +95,7 @@ class AppConfig:
             whisper=WhisperConfig(**data.get("whisper", {})),
             ollama=OllamaConfig(**data.get("ollama", {})),
             output=OutputConfig(**data.get("output", {})),
+            timestamp=TimestampConfig(**data.get("timestamp", {})),
             max_workers=data.get("max_workers", 2),
             log_level=data.get("log_level", "INFO"),
             log_file=data.get("log_file"),
@@ -101,22 +119,36 @@ class AppConfig:
         if self.ollama.prompt_template_id:
             ollama_data["prompt_template_id"] = self.ollama.prompt_template_id
 
+        whisper_data = {
+            "model": self.whisper.model,
+            "device": self.whisper.device,
+            "compute_type": self.whisper.compute_type,
+            "beam_size": self.whisper.beam_size,
+            "vad_filter": self.whisper.vad_filter,
+            "speech_pad_ms": self.whisper.speech_pad_ms,
+            "min_silence_duration_ms": self.whisper.min_silence_duration_ms,
+            "use_whisperx": self.whisper.use_whisperx,
+            "whisperx_align": self.whisper.whisperx_align,
+        }
+        if self.whisper.hf_token:
+            whisper_data["hf_token"] = self.whisper.hf_token
+
         data = {
-            "whisper": {
-                "model": self.whisper.model,
-                "device": self.whisper.device,
-                "compute_type": self.whisper.compute_type,
-                "beam_size": self.whisper.beam_size,
-                "vad_filter": self.whisper.vad_filter,
-                "speech_pad_ms": self.whisper.speech_pad_ms,
-                "min_silence_duration_ms": self.whisper.min_silence_duration_ms,
-            },
+            "whisper": whisper_data,
             "ollama": ollama_data,
             "output": {
                 "encoding": self.output.encoding,
                 "keep_original": self.output.keep_original,
                 "bilingual": self.output.bilingual,
                 "original_on_top": self.output.original_on_top,
+            },
+            "timestamp": {
+                "enabled": self.timestamp.enabled,
+                "min_duration": self.timestamp.min_duration,
+                "max_duration": self.timestamp.max_duration,
+                "min_gap": self.timestamp.min_gap,
+                "max_gap_warning": self.timestamp.max_gap_warning,
+                "chars_per_second": self.timestamp.chars_per_second,
             },
             "max_workers": self.max_workers,
             "log_level": self.log_level,
@@ -150,12 +182,20 @@ class AppConfig:
                 "vad_filter": self.whisper.vad_filter,
                 "speech_pad_ms": self.whisper.speech_pad_ms,
                 "min_silence_duration_ms": self.whisper.min_silence_duration_ms,
+                "use_whisperx": self.whisper.use_whisperx,
+                "whisperx_align": self.whisper.whisperx_align,
             },
             "ollama": ollama_dict,
             "output": {
                 "encoding": self.output.encoding,
                 "keep_original": self.output.keep_original,
                 "bilingual": self.output.bilingual,
+            },
+            "timestamp": {
+                "enabled": self.timestamp.enabled,
+                "min_duration": self.timestamp.min_duration,
+                "max_duration": self.timestamp.max_duration,
+                "min_gap": self.timestamp.min_gap,
             },
             "max_workers": self.max_workers,
             "log_level": self.log_level,
