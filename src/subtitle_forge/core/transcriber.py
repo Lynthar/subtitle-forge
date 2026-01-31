@@ -15,15 +15,63 @@ from ..exceptions import TranscriptionError
 logger = logging.getLogger(__name__)
 
 # Fix for PyTorch 2.6+ weights_only security change before importing whisperx
-# This must be done before any model loading
-try:
-    import torch
-    from omegaconf import DictConfig, ListConfig, OmegaConf
-    # Add all omegaconf classes that might be needed during model loading
-    torch.serialization.add_safe_globals([DictConfig, ListConfig, OmegaConf])
-except (ImportError, AttributeError):
-    # omegaconf not available or older PyTorch version without add_safe_globals
-    pass
+# This must be done before any model loading (pyannote-audio uses omegaconf)
+def _setup_pytorch_omegaconf_compatibility():
+    """Add omegaconf classes to PyTorch safe globals for model loading."""
+    try:
+        import torch
+        if not hasattr(torch.serialization, 'add_safe_globals'):
+            return  # Older PyTorch version
+
+        import omegaconf
+
+        safe_globals = []
+
+        # Add all classes from omegaconf that might be serialized
+        # Main classes
+        for cls_name in ['DictConfig', 'ListConfig', 'OmegaConf', 'MISSING', 'MissingMandatoryValue']:
+            if hasattr(omegaconf, cls_name):
+                obj = getattr(omegaconf, cls_name)
+                if isinstance(obj, type):
+                    safe_globals.append(obj)
+
+        # Classes from omegaconf.base
+        try:
+            from omegaconf import base
+            for cls_name in ['ContainerMetadata', 'Metadata', 'Node', 'Container', 'SCMode', 'DictKeyType']:
+                if hasattr(base, cls_name):
+                    obj = getattr(base, cls_name)
+                    if isinstance(obj, type):
+                        safe_globals.append(obj)
+        except ImportError:
+            pass
+
+        # Classes from omegaconf.nodes
+        try:
+            from omegaconf import nodes
+            for cls_name in ['ValueNode', 'AnyNode', 'StringNode', 'IntegerNode', 'FloatNode', 'BooleanNode', 'EnumNode', 'InterpolationResultNode']:
+                if hasattr(nodes, cls_name):
+                    obj = getattr(nodes, cls_name)
+                    if isinstance(obj, type):
+                        safe_globals.append(obj)
+        except ImportError:
+            pass
+
+        # Direct imports for classes that might be serialized by full path
+        try:
+            from omegaconf.listconfig import ListConfig as LC
+            from omegaconf.dictconfig import DictConfig as DC
+            safe_globals.extend([LC, DC])
+        except ImportError:
+            pass
+
+        if safe_globals:
+            torch.serialization.add_safe_globals(safe_globals)
+
+    except ImportError:
+        pass  # omegaconf not installed
+
+_setup_pytorch_omegaconf_compatibility()
 
 # Check if WhisperX is available
 WHISPERX_AVAILABLE = False
