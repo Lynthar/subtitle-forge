@@ -37,6 +37,8 @@ class WhisperConfig:
     use_whisperx: bool = True  # Use WhisperX for better timestamp accuracy
     whisperx_align: bool = True  # Enable forced alignment with wav2vec2
     hf_token: Optional[str] = None  # HuggingFace token for pyannote models
+    # HuggingFace mirror for users in regions with limited access
+    hf_endpoint: Optional[str] = None  # e.g., "https://hf-mirror.com"
 
 
 @dataclass
@@ -132,6 +134,8 @@ class AppConfig:
         }
         if self.whisper.hf_token:
             whisper_data["hf_token"] = self.whisper.hf_token
+        if self.whisper.hf_endpoint:
+            whisper_data["hf_endpoint"] = self.whisper.hf_endpoint
 
         data = {
             "whisper": whisper_data,
