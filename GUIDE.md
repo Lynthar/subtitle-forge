@@ -1,433 +1,373 @@
 # subtitle-forge 使用指南
 
-本文档提供 subtitle-forge 的完整安装指南、环境配置、详细使用说明和故障排查。
+本地化视频字幕生成和翻译工具的完整使用指南。
 
 ---
 
 ## 目录
 
-1. [安装指南](#安装指南)
-   - [Windows](#windows-安装)
-   - [macOS](#macos-安装)
-   - [Linux](#linux-安装)
-2. [环境配置](#环境配置)
+1. [安装与配置](#一安装与配置)
+   - [系统要求](#系统要求)
+   - [各平台安装](#各平台安装)
    - [GPU 加速设置](#gpu-加速设置)
-   - [HuggingFace 镜像配置](#huggingface-镜像配置中国用户)
-3. [详细使用说明](#详细使用说明)
-   - [单文件处理](#单文件处理)
-   - [批量处理](#批量处理)
-   - [仅转写](#仅转写不翻译)
-   - [仅翻译](#仅翻译已有字幕)
-   - [双语字幕](#双语字幕)
-4. [配置文件](#配置文件)
+   - [HuggingFace 镜像](#huggingface-镜像中国用户)
+   - [硬件与模型推荐](#硬件与模型推荐)
+   - [更新方法](#更新方法)
+2. [基本使用](#二基本使用)
+   - [快速开始](#快速开始)
+   - [路径格式说明](#路径格式说明)
+   - [常见用法示例](#常见用法示例)
+   - [配置文件](#配置文件)
+3. [命令索引](#三命令索引)
+   - [process - 完整处理](#process---完整处理)
+   - [batch - 批量处理](#batch---批量处理)
+   - [transcribe - 仅转录](#transcribe---仅转录)
+   - [translate - 仅翻译](#translate---仅翻译)
+   - [config - 配置管理](#config---配置管理)
+   - [quickstart - 初始化向导](#quickstart---初始化向导)
+4. [故障排查](#四故障排查)
+5. [附录](#五附录)
+   - [支持的语言](#支持的语言)
+   - [时间戳后处理](#时间戳后处理)
    - [翻译提示词配置](#翻译提示词配置)
-   - [提示词库](#提示词库)
-   - [字幕时间轴调整](#字幕时间轴调整)
-     - [WhisperX vs faster-whisper 对比](#whisperx-vs-faster-whisper-对比)
-     - [VAD 预设模式](#预设模式)
-     - [后处理时间戳修正](#后处理时间戳修正)
-5. [故障排查](#故障排查)
-6. [支持的语言](#支持的语言)
-7. [Whisper 模型选择](#whisper-模型选择)
-8. [更新方法](#更新方法)
 
 ---
 
-## 安装指南
+# 一、安装与配置
 
-### Windows 安装
+## 系统要求
 
-#### 1. 安装 Python
+| 组件 | 最低要求 | 推荐配置 |
+|------|---------|---------|
+| **操作系统** | Windows 10 / macOS 10.15 / Ubuntu 20.04 | Windows 11 / macOS 14 / Ubuntu 22.04 |
+| **Python** | 3.9+ | 3.11+ |
+| **内存** | 8 GB | 16 GB+ |
+| **显卡** | 无（CPU 可运行，较慢） | NVIDIA GPU 6GB+ VRAM |
+| **存储** | 10 GB（模型缓存） | SSD 推荐 |
 
-1. 下载 Python 3.11+: https://python.org/downloads
-2. 运行安装程序
-3. **重要**: 勾选 "Add Python to PATH"
-4. 点击 "Install Now"
+**必需依赖**：
+- Python 3.9+
+- ffmpeg
+- Ollama
 
-验证安装:
+---
+
+## 各平台安装
+
+### Windows
+
 ```powershell
-python --version
-```
+# 1. 安装 Python（从 https://python.org/downloads 下载）
+#    重要：勾选 "Add Python to PATH"
 
-#### 2. 安装 ffmpeg
+# 2. 安装 ffmpeg（任选一种）
+choco install ffmpeg          # Chocolatey
+winget install ffmpeg         # winget
+# 或手动下载：https://ffmpeg.org/download.html
 
-**方式一：使用 Chocolatey（推荐）**
+# 3. 安装 Ollama（从 https://ollama.ai/download 下载）
 
-如果已安装 [Chocolatey](https://chocolatey.org/install):
-```powershell
-choco install ffmpeg
-```
-
-**方式二：使用 winget**
-```powershell
-winget install ffmpeg
-```
-
-**方式三：手动安装**
-
-1. 下载: https://ffmpeg.org/download.html (选择 Windows builds)
-2. 解压到 `C:\ffmpeg`
-3. 添加 `C:\ffmpeg\bin` 到系统 PATH:
-   - 右键"此电脑" → 属性 → 高级系统设置
-   - 环境变量 → 系统变量 → Path → 编辑
-   - 新建 → 输入 `C:\ffmpeg\bin`
-   - 确定保存
-
-验证安装:
-```powershell
-ffmpeg -version
-```
-
-#### 3. 安装 Ollama
-
-1. 下载: https://ollama.ai/download
-2. 运行安装程序
-3. 打开终端，启动 Ollama 服务:
-```powershell
+# 4. 启动 Ollama 服务（保持终端运行）
 ollama serve
-```
 
-> **提示**: 保持此终端窗口运行，或将 Ollama 设置为后台服务。
-
-#### 4. 安装 subtitle-forge
-
-```powershell
-# 克隆仓库
+# 5. 安装 subtitle-forge（新终端）
 git clone https://github.com/your-repo/subtitle-forge.git
 cd subtitle-forge
-
-# 安装
 pip install -e .
-```
 
-#### 5. 运行设置向导
-
-```powershell
+# 6. 运行设置向导
 subtitle-forge quickstart
 ```
 
-向导会自动检测环境并下载所需模型。
-
----
-
-### macOS 安装
-
-#### 使用 Homebrew（推荐）
+### macOS
 
 ```bash
-# 安装 Homebrew（如未安装）
-/bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
+# 使用 Homebrew
+brew install python@3.11 ffmpeg ollama
 
+# 启动 Ollama
+brew services start ollama  # 后台服务
+# 或 ollama serve           # 前台运行
+
+# 安装 subtitle-forge
+git clone https://github.com/your-repo/subtitle-forge.git
+cd subtitle-forge
+pip install -e .
+subtitle-forge quickstart
+```
+
+### Linux (Ubuntu/Debian)
+
+```bash
 # 安装依赖
-brew install python@3.11 ffmpeg
-
-# 安装 Ollama
-brew install ollama
-
-# 启动 Ollama 服务
-ollama serve
-```
-
-> **提示**: 在另一个终端窗口运行 `ollama serve`，或使用 `brew services start ollama` 设置后台服务。
-
-#### 安装 subtitle-forge
-
-```bash
-# 克隆仓库
-git clone https://github.com/your-repo/subtitle-forge.git
-cd subtitle-forge
-
-# 安装
-pip install -e .
-
-# 运行设置向导
-subtitle-forge quickstart
-```
-
----
-
-### Linux 安装
-
-#### Ubuntu / Debian
-
-```bash
-# 更新包管理器
 sudo apt update
-
-# 安装 Python 和 ffmpeg
 sudo apt install python3 python3-pip python3-venv ffmpeg
 
 # 安装 Ollama
 curl -fsSL https://ollama.ai/install.sh | sh
+ollama serve  # 保持运行
 
-# 启动 Ollama 服务
-ollama serve
-```
-
-#### Fedora / RHEL
-
-```bash
-# 安装依赖
-sudo dnf install python3 python3-pip ffmpeg
-
-# 安装 Ollama
-curl -fsSL https://ollama.ai/install.sh | sh
-
-# 启动 Ollama
-ollama serve
-```
-
-#### Arch Linux
-
-```bash
-# 安装依赖
-sudo pacman -S python python-pip ffmpeg
-
-# 安装 Ollama (AUR)
-yay -S ollama
-
-# 启动 Ollama
-ollama serve
-```
-
-#### 安装 subtitle-forge
-
-```bash
-# 克隆仓库
+# 安装 subtitle-forge（推荐使用虚拟环境）
 git clone https://github.com/your-repo/subtitle-forge.git
 cd subtitle-forge
-
-# 创建虚拟环境（推荐）
 python3 -m venv venv
 source venv/bin/activate
-
-# 安装
 pip install -e .
-
-# 运行设置向导
 subtitle-forge quickstart
 ```
 
+**其他发行版**：
+- **Fedora**: `sudo dnf install python3 python3-pip ffmpeg`
+- **Arch**: `sudo pacman -S python python-pip ffmpeg`
+
 ---
 
-## 环境配置
+## GPU 加速设置
 
-### GPU 加速设置
+GPU 加速可大幅提升处理速度（5-10 倍）。
 
-GPU 加速可显著提升转写和翻译速度。subtitle-forge 支持 NVIDIA GPU（通过 CUDA）。
-
-#### 检查 GPU 支持
+### 检查 GPU 状态
 
 ```bash
 # 检查 PyTorch 是否识别 GPU
-python -c "import torch; print(f'CUDA available: {torch.cuda.is_available()}')"
+python -c "import torch; print(f'CUDA: {torch.cuda.is_available()}')"
 
 # 查看 GPU 信息
-python -c "import torch; print(torch.cuda.get_device_name(0) if torch.cuda.is_available() else 'No GPU')"
+nvidia-smi
 ```
 
-#### 按 GPU 型号安装 PyTorch
-
-不同 GPU 需要不同版本的 CUDA。根据你的显卡选择正确的安装命令:
+### 按显卡型号安装 PyTorch
 
 | GPU 系列 | 架构 | 安装命令 |
 |----------|------|----------|
-| **RTX 50xx** (5090, 5080, 5070...) | Blackwell (sm_120) | `pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu128` |
-| **RTX 40xx** (4090, 4080, 4070...) | Ada Lovelace (sm_89) | `pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu124` |
-| **RTX 30xx** (3090, 3080, 3070...) | Ampere (sm_86) | `pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu124` |
-| **RTX 20xx / GTX 16xx** | Turing (sm_75) | `pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu124` |
-| **无 GPU / 仅 CPU** | - | `pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cpu` |
+| RTX 50xx (5090, 5080...) | Blackwell | `pip install torch --index-url https://download.pytorch.org/whl/cu128` |
+| RTX 40xx (4090, 4080...) | Ada | `pip install torch --index-url https://download.pytorch.org/whl/cu124` |
+| RTX 30xx (3090, 3080...) | Ampere | `pip install torch --index-url https://download.pytorch.org/whl/cu124` |
+| RTX 20xx / GTX 16xx | Turing | `pip install torch --index-url https://download.pytorch.org/whl/cu124` |
+| 无 GPU | - | `pip install torch --index-url https://download.pytorch.org/whl/cpu` |
 
-> **重要**: RTX 50 系列（Blackwell 架构）**必须**使用 CUDA 12.8 (`cu128`)。使用其他版本会导致 "sm_120 is not compatible" 错误。
+> **注意**：RTX 50 系列必须使用 CUDA 12.8 (`cu128`)，否则会报 "sm_120 is not compatible" 错误。
 
-#### 完整安装流程
+### 完整安装流程
 
 ```bash
 # 1. 卸载现有 PyTorch
 pip uninstall torch torchvision torchaudio -y
 
-# 2. 安装正确版本（以 RTX 40 系列为例）
+# 2. 安装对应版本（以 RTX 40 系列为例）
 pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu124
 
-# 3. 验证安装
+# 3. 验证
 python -c "import torch; print(f'CUDA: {torch.cuda.is_available()}, Version: {torch.version.cuda}')"
 ```
 
 ---
 
-### HuggingFace 镜像配置（中国用户）
+## HuggingFace 镜像（中国用户）
 
-Whisper 模型（约 3GB）从 HuggingFace 下载。中国大陆用户可能遇到下载缓慢问题，可配置镜像加速。
+Whisper 模型从 HuggingFace 下载，国内用户可配置镜像加速。
 
-#### 临时设置（当前会话）
+### 临时设置
 
-**Linux / macOS:**
 ```bash
+# Linux / macOS
 export HF_ENDPOINT=https://hf-mirror.com
 subtitle-forge process video.mp4 -t zh
-```
 
-**Windows PowerShell:**
-```powershell
+# Windows PowerShell
 $env:HF_ENDPOINT = "https://hf-mirror.com"
-subtitle-forge process video.mp4 -t zh
-```
 
-**Windows CMD:**
-```cmd
+# Windows CMD
 set HF_ENDPOINT=https://hf-mirror.com
-subtitle-forge process video.mp4 -t zh
 ```
 
-#### 永久设置
+### 永久设置
 
-**macOS (zsh):**
 ```bash
-echo 'export HF_ENDPOINT=https://hf-mirror.com' >> ~/.zshrc
-source ~/.zshrc
-```
+# macOS (zsh)
+echo 'export HF_ENDPOINT=https://hf-mirror.com' >> ~/.zshrc && source ~/.zshrc
 
-**Linux (bash):**
-```bash
-echo 'export HF_ENDPOINT=https://hf-mirror.com' >> ~/.bashrc
-source ~/.bashrc
-```
+# Linux (bash)
+echo 'export HF_ENDPOINT=https://hf-mirror.com' >> ~/.bashrc && source ~/.bashrc
 
-**Windows (永久环境变量):**
-```powershell
+# Windows (需要管理员权限)
 [Environment]::SetEnvironmentVariable("HF_ENDPOINT", "https://hf-mirror.com", "User")
-# 重启 PowerShell 后生效
 ```
 
-#### 可用镜像
+### 命令行指定
 
-- `https://hf-mirror.com` (推荐)
-- `https://huggingface.sukaka.top`
+```bash
+subtitle-forge process video.mp4 -t zh --hf-mirror https://hf-mirror.com
+```
+
+**可用镜像**：`https://hf-mirror.com`、`https://huggingface.sukaka.top`
 
 ---
 
-## 详细使用说明
+## 硬件与模型推荐
 
-### 单文件处理
+### Whisper 模型（语音识别）
 
-基本用法 - 生成指定语言的字幕:
+| 显存 | 推荐模型 | 速度 | 准确度 |
+|------|---------|------|--------|
+| < 4 GB | `small` | 快 | 较好 |
+| 4-6 GB | `medium` | 中等 | 高 |
+| 6 GB+ | `large-v3` | 较慢 | 最高 |
 
 ```bash
-# 生成中文字幕
+# 设置默认模型
+subtitle-forge config set whisper.model large-v3
+
+# 自动选择
+subtitle-forge transcribe video.mp4 --auto-model
+```
+
+### Ollama 模型（翻译）
+
+| 显存 | 推荐模型 | 翻译速度 | 翻译质量 |
+|------|---------|---------|---------|
+| < 6 GB | `qwen2.5:7b` | 快 | 一般 |
+| 6-12 GB | `qwen2.5:14b` | 中等 | 较好 |
+| 16 GB+ | `qwen2.5:32b` | 较慢 | 最佳 |
+
+```bash
+# 设置默认模型
+subtitle-forge config set ollama.model qwen2.5:14b
+```
+
+---
+
+## 更新方法
+
+```bash
+# 标准更新
+cd subtitle-forge
+git pull origin main
+pip install -e .
+
+# 一键更新（含缓存清理）
+cd subtitle-forge && git pull && find . -name "__pycache__" -exec rm -rf {} + 2>/dev/null; pip install -e .
+
+# 查看版本
+subtitle-forge version
+```
+
+---
+
+# 二、基本使用
+
+## 快速开始
+
+```bash
+# 1. 确保 Ollama 正在运行
+ollama serve
+
+# 2. 运行设置向导（首次使用）
+subtitle-forge quickstart
+
+# 3. 处理视频
+subtitle-forge process video.mp4 -t zh
+```
+
+---
+
+## 路径格式说明
+
+不同操作系统的路径格式有所不同：
+
+### Windows
+
+```powershell
+# 使用反斜杠或正斜杠
+subtitle-forge process "D:\Videos\movie.mp4" -t zh
+subtitle-forge process "D:/Videos/movie.mp4" -t zh
+
+# 路径包含空格时必须加引号
+subtitle-forge process "C:\My Videos\movie.mp4" -t zh
+
+# 当前目录
+subtitle-forge process .\video.mp4 -t zh
+
+# 批量处理
+subtitle-forge batch "D:\Videos\" -t zh
+```
+
+### macOS / Linux
+
+```bash
+# 使用正斜杠
+subtitle-forge process /Users/name/Videos/movie.mp4 -t zh
+
+# 路径包含空格时加引号
+subtitle-forge process "/Users/name/My Videos/movie.mp4" -t zh
+
+# 使用 ~ 表示主目录
+subtitle-forge process ~/Videos/movie.mp4 -t zh
+
+# 当前目录
+subtitle-forge process ./video.mp4 -t zh
+```
+
+### 通用建议
+
+- **路径包含空格**：始终使用引号包裹
+- **特殊字符**：避免使用 `& | < > ! $ ; ` 等特殊字符
+- **中文路径**：支持，但建议使用英文路径避免潜在问题
+
+---
+
+## 常见用法示例
+
+### 生成字幕
+
+```bash
+# 基本用法：视频 → 中文字幕
 subtitle-forge process video.mp4 -t zh
 
-# 生成日文字幕
-subtitle-forge process video.mp4 -t ja
-
-# 生成多语言字幕
+# 多语言字幕
 subtitle-forge process video.mp4 -t zh -t ja -t ko
-```
 
-指定输出目录:
-```bash
-subtitle-forge process video.mp4 -t zh -o ./subtitles/
-```
+# 双语字幕（原文 + 译文）
+subtitle-forge process video.mp4 -t zh --bilingual
 
-指定源语言（跳过自动检测）:
-```bash
+# 指定输出目录
+subtitle-forge process video.mp4 -t zh -o ./output/
+
+# 指定源语言（跳过自动检测）
 subtitle-forge process video.mp4 -s en -t zh
 ```
 
----
-
 ### 批量处理
 
-处理文件夹中的所有视频:
-
 ```bash
-# 处理当前文件夹
-subtitle-forge batch ./ -t zh
-
-# 处理指定文件夹
-subtitle-forge batch /path/to/videos/ -t zh
+# 处理文件夹中所有视频
+subtitle-forge batch ./videos/ -t zh
 
 # 递归处理子文件夹
-subtitle-forge batch /path/to/videos/ -t zh --recursive
-```
+subtitle-forge batch ./videos/ -t zh --recursive
 
-使用文件列表:
-```bash
-# 创建文件列表
-echo "video1.mp4" > files.txt
-echo "video2.mkv" >> files.txt
-
-# 处理列表中的文件
-subtitle-forge batch --file-list files.txt -t zh
-```
-
-设置并发数:
-```bash
-# 同时处理 4 个视频
+# 并发处理
 subtitle-forge batch ./videos/ -t zh --workers 4
 ```
 
----
-
-### 仅转写（不翻译）
-
-只生成原语言字幕，不进行翻译:
+### 仅转录（不翻译）
 
 ```bash
-# 自动检测语言
+# 生成原语言字幕
 subtitle-forge transcribe video.mp4
 
-# 指定源语言
+# 指定语言
 subtitle-forge transcribe video.mp4 --language en
-
-# 自动选择最佳 Whisper 模型
-subtitle-forge transcribe video.mp4 --auto-model
-
-# 指定 Whisper 模型
-subtitle-forge transcribe video.mp4 --model large-v3
 ```
-
----
 
 ### 仅翻译（已有字幕）
 
-翻译现有的 SRT 字幕文件:
-
 ```bash
-# 翻译字幕文件
+# 翻译现有字幕文件
 subtitle-forge translate video.en.srt -t zh
 
-# 指定源语言
-subtitle-forge translate video.srt -s en -t zh
-
 # 生成双语字幕
-subtitle-forge translate video.srt -s en -t zh --bilingual
-```
-
----
-
-### 双语字幕
-
-生成包含原文和译文的双语字幕:
-
-```bash
-# 处理视频，生成双语字幕
-subtitle-forge process video.mp4 -t zh --bilingual
-
-# 翻译现有字幕为双语
 subtitle-forge translate video.en.srt -t zh --bilingual
-```
-
-双语字幕格式示例:
-```
-1
-00:00:01,000 --> 00:00:03,000
-Hello, how are you?
-你好，你好吗？
-
-2
-00:00:04,000 --> 00:00:06,000
-I'm fine, thank you.
-我很好，谢谢。
 ```
 
 ---
@@ -436,446 +376,300 @@ I'm fine, thank you.
 
 ### 位置
 
-配置文件位于:
-- **Linux/macOS**: `~/.config/subtitle-forge/config.yaml`
-- **Windows**: `%APPDATA%\subtitle-forge\config.yaml`
+| 系统 | 路径 |
+|------|------|
+| Linux/macOS | `~/.config/subtitle-forge/config.yaml` |
+| Windows | `%APPDATA%\subtitle-forge\config.yaml` |
 
-### 查看配置
+### 常用命令
 
 ```bash
+# 查看当前配置
 subtitle-forge config show
-```
 
-### 修改配置
-
-```bash
-# 设置 Whisper 模型
+# 修改配置
 subtitle-forge config set whisper.model large-v3
-
-# 设置翻译模型
 subtitle-forge config set ollama.model qwen2.5:32b
-
-# 设置并发数
 subtitle-forge config set max_workers 4
-```
 
-### 重置配置
-
-```bash
+# 重置配置
 subtitle-forge config reset
-```
 
-### 配置选项说明
-
-```yaml
-# Whisper 语音识别设置
-whisper:
-  model: large-v3          # 模型名称: tiny, base, small, medium, large-v3
-  device: cuda             # 设备: cuda 或 cpu
-  compute_type: float16    # 计算精度: float16, int8_float16, int8
-  beam_size: 5             # Beam search 大小
-  vad_filter: true         # VAD 过滤
-
-# Ollama 翻译设置
-ollama:
-  model: qwen2.5:14b       # 翻译模型
-  host: http://localhost:11434  # Ollama 服务地址
-  temperature: 0.3         # 生成温度
-  max_batch_size: 10       # 批次大小
-
-# 输出设置
-output:
-  encoding: utf-8          # 字幕编码
-  keep_original: true      # 保留原始字幕
-  bilingual: false         # 默认双语模式
-
-# 全局设置
-max_workers: 2             # 并发处理数
-log_level: INFO            # 日志级别
-```
-
-### 翻译提示词配置
-
-翻译质量很大程度上取决于发送给 AI 模型的提示词（Prompt）。subtitle-forge 允许你查看和自定义翻译提示词。
-
-#### 查看当前提示词
-
-```bash
-subtitle-forge config show-prompt
-```
-
-这会显示当前使用的翻译提示词模板，并标注是默认模板还是自定义模板。
-
-#### 导出提示词
-
-将当前提示词导出到文件以便编辑:
-
-```bash
-subtitle-forge config export-prompt -o my_prompt.txt
-```
-
-#### 自定义提示词
-
-1. 首先导出默认提示词:
-```bash
-subtitle-forge config export-prompt -o my_prompt.txt
-```
-
-2. 用文本编辑器修改 `my_prompt.txt`
-
-3. 应用自定义提示词:
-```bash
-subtitle-forge config set-prompt -f my_prompt.txt
-```
-
-#### 重置为默认提示词
-
-```bash
-subtitle-forge config reset-prompt
-```
-
-#### 可用占位符
-
-自定义提示词时，必须包含以下占位符（系统会自动替换为实际值）:
-
-| 占位符 | 说明 | 示例值 |
-|--------|------|--------|
-| `{source_lang}` | 源语言名称（必需） | English |
-| `{target_lang}` | 目标语言名称（必需） | Simplified Chinese |
-| `{segments}` | 要翻译的字幕内容（必需） | [1] Hello... |
-| `{context_before}` | 前文上下文（可选） | 前 3 条字幕 |
-| `{context_after}` | 后文上下文（可选） | 后 2 条字幕 |
-
-#### 自定义提示词示例
-
-```
-你是专业的影视字幕翻译专家。
-
-翻译要求:
-1. 保持对话的自然流畅
-2. 捕捉角色的情感和语气
-3. 保持字幕简洁，适合阅读
-4. 每行保留 [数字] 前缀
-5. 只输出翻译结果，不要解释
-{context_before}
-将以下字幕从 {source_lang} 翻译成 {target_lang}:
-{segments}
-{context_after}
-翻译结果:
-```
-
-> **提示**: 好的提示词应该明确翻译风格（正式/口语）、目标受众、以及特定领域术语的处理方式。针对不同类型的视频（电影、纪录片、教程等）可以使用不同的提示词。
-
-### 提示词库
-
-subtitle-forge 内置了多种预设的翻译提示词模板，适用于不同类型的视频内容。
-
-#### 查看可用模板
-
-```bash
-# 列出所有模板
-subtitle-forge config list-prompts
-
-# 按类型筛选
-subtitle-forge config list-prompts --genre movie
-```
-
-#### 内置模板
-
-| 模板 ID | 名称 | 适用场景 |
-|---------|------|----------|
-| `movie-general` | 通用电影 | 大多数电影和电视剧 |
-| `movie-scifi` | 科幻电影 | 科幻、太空、未来科技题材 |
-| `movie-fantasy` | 奇幻电影 | 魔法、奇幻、神话题材 |
-| `movie-historical` | 历史题材 | 历史、古装、战争题材 |
-| `movie-drama` | 现实剧情 | 现实题材、家庭、情感剧 |
-| `documentary` | 纪录片 | 纪录片、科教片 |
-| `anime` | 动漫 | 日本动漫、动画 |
-| `adult` | 成人内容 | 成人影视内容 |
-| `technical` | 技术教程 | 编程、软件、技术教程 |
-| `news` | 新闻报道 | 新闻、时事报道 |
-
-#### 使用模板
-
-```bash
-# 设置默认使用的模板
-subtitle-forge config use-prompt movie-scifi
-
-# 处理时指定模板（不改变默认设置）
-subtitle-forge process video.mp4 -t zh --prompt-template anime
-```
-
-#### 查看模板详情
-
-```bash
-subtitle-forge config show-prompt-template movie-scifi
-```
-
-#### 自定义模板
-
-基于现有模板创建自定义版本：
-
-```bash
-# 1. 导出模板
-subtitle-forge config export-prompt-template movie-scifi -o my_scifi.txt
-
-# 2. 编辑 my_scifi.txt
-
-# 3. 保存为新模板
-subtitle-forge config save-prompt -f my_scifi.txt --id my-scifi --name "我的科幻模板"
-
-# 4. 使用新模板
-subtitle-forge config use-prompt my-scifi
-```
-
-#### 删除自定义模板
-
-```bash
-subtitle-forge config delete-prompt my-scifi
-```
-
-> **注意**: 只能删除用户自定义的模板，内置模板无法删除。
-
----
-
-### 字幕时间轴调整
-
-subtitle-forge 提供两种语音识别后端，各有不同的时间轴优化方式：
-
-#### WhisperX vs faster-whisper 对比
-
-| 特性 | WhisperX（默认） | faster-whisper |
-|------|------------------|----------------|
-| **VAD 引擎** | Pyannote（神经网络） | Silero VAD（轻量级） |
-| **时间戳精度** | 更高（词级强制对齐） | 一般（段落级） |
-| **VAD 参数调整** | 不支持自定义 | 支持自定义 |
-| **处理速度** | 较慢（额外对齐步骤） | 较快 |
-| **依赖** | 需要额外安装 | 内置 |
-
-#### 选择后端
-
-```bash
-# 使用 WhisperX（默认，更精确的时间戳）
-subtitle-forge process video.mp4 -t zh --whisperx
-
-# 使用 faster-whisper（可自定义 VAD 参数）
-subtitle-forge process video.mp4 -t zh --no-whisperx
-```
-
-#### WhisperX 时间轴优化
-
-WhisperX 使用 Pyannote 进行语音活动检测，然后通过 wav2vec2 模型进行强制对齐，获得词级时间戳。这种方式通常能得到更精确的时间轴，但不支持用户自定义 VAD 参数。
-
-**适用场景**：
-- 需要最精确时间戳的场景
-- 音频质量较好的视频
-- 不需要自定义 VAD 参数
-
-**配置选项**（在 config.yaml 中）：
-```yaml
-whisper:
-  use_whisperx: true       # 启用 WhisperX
-  whisperx_align: true     # 启用 wav2vec2 强制对齐（推荐）
-```
-
-#### faster-whisper VAD 参数调整（仅 --no-whisperx 时有效）
-
-使用 `--no-whisperx` 时，可以通过以下参数调整 Silero VAD 的行为：
-
-##### 预设模式
-
-```bash
-# 默认模式（适合大多数视频）
-subtitle-forge process video.mp4 -t zh --vad-mode default
-
-# 紧凑模式（快节奏对话，如动作片）
-subtitle-forge process video.mp4 -t zh --vad-mode aggressive
-
-# 宽松模式（慢节奏，如纪录片）
-subtitle-forge process video.mp4 -t zh --vad-mode relaxed
-
-# 精确模式（技术视频，需要精确同步）
-subtitle-forge process video.mp4 -t zh --vad-mode precise
-```
-
-#### VAD 模式参数
-
-| 模式 | speech_pad (ms) | min_silence (ms) | 适用场景 |
-|------|-----------------|------------------|----------|
-| `default` | 100 | 500 | 一般电影/电视 |
-| `aggressive` | 50 | 300 | 快节奏对话 |
-| `relaxed` | 200 | 800 | 慢节奏/纪录片 |
-| `precise` | 30 | 200 | 技术视频/精确同步 |
-
-#### 自定义参数
-
-```bash
-# 手动设置 VAD 参数
-subtitle-forge process video.mp4 -t zh --speech-pad 80 --min-silence 400
-```
-
-参数说明：
-- `--speech-pad`: 语音前后的填充时间（毫秒）。减小此值可使字幕更紧贴对话。
-- `--min-silence`: 最小静音时长（毫秒）。减小此值可创建更多、更短的字幕段落。
-
-#### 后处理时间戳修正
-
-无论使用哪种后端，都可以启用后处理来修正时间戳问题。后处理支持三种模式：
-
-##### 处理模式
-
-| 模式 | 说明 | 适用场景 |
-|------|------|----------|
-| `off` | 完全禁用，信任 WhisperX 原始输出 | WhisperX 对齐效果好时 |
-| `minimal` | 仅修复重叠和最小时长（**默认**） | 大多数情况 |
-| `full` | 完整处理：分割长段落、延长短段落等 | 需要分割多句话时 |
-
-##### 命令行用法
-
-```bash
-# 使用默认模式 (minimal)
-subtitle-forge process video.mp4 -t zh
-
-# 明确指定模式
-subtitle-forge process video.mp4 -t zh --timestamp-mode minimal
-
-# 完全信任 WhisperX 输出
-subtitle-forge process video.mp4 -t zh --timestamp-mode off
-
-# 完整处理（分割长段落）
-subtitle-forge process video.mp4 -t zh --timestamp-mode full
-
-# 完全禁用后处理
-subtitle-forge process video.mp4 -t zh --no-post-process
-```
-
-##### 模式详细说明
-
-**`minimal` 模式（推荐）**
-- 修复字幕重叠
-- 确保最小显示时长
-- 不分割或延长段落
-- 最大程度保留 WhisperX 原始时间戳
-
-**`off` 模式**
-- 完全不处理
-- 适合 WhisperX 对齐效果已经很好的情况
-
-**`full` 模式**
-- 分割多句话段落
-- 根据文字长度延长显示时间
-- 修复所有时间问题
-- 可能会改变原始时间戳
-
-##### CJK 语言优化
-
-系统会自动检测中文、日文、韩文，并使用针对性优化：
-- 使用更慢的阅读速度（10 字/秒 vs 西文 15 字/秒）
-- 使用更低的分割阈值（15 字符 vs 西文 30 字符）
-
-##### 配置选项
-
-在 `config.yaml` 中可以配置：
-
-```yaml
-timestamp:
-  enabled: true              # 启用后处理
-  mode: "minimal"            # 处理模式: off, minimal, full
-  min_duration: 0.5          # 最小字幕时长（秒）
-  max_duration: 8.0          # 最大字幕时长（秒）
-  min_gap: 0.05              # 字幕间最小间隙（秒）
-  max_gap_warning: 50.0      # 大间隙警告阈值（秒）
-  chars_per_second: 15.0     # 西文阅读速度（字符/秒）
-  cjk_chars_per_second: 10.0 # 中日韩阅读速度（字符/秒）
-  split_threshold: 30        # 分割阈值（字符数，仅 full 模式）
-```
-
-#### 选择建议
-
-| 场景 | 推荐方案 |
-|------|----------|
-| 一般使用，追求精确时间戳 | `--whisperx`（默认） |
-| 时间戳不够精确，需要微调 | `--no-whisperx --vad-mode precise` |
-| 快节奏对话（动作片） | `--no-whisperx --vad-mode aggressive` |
-| 慢节奏对话（纪录片） | `--no-whisperx --vad-mode relaxed` |
-| 需要精细控制 VAD 参数 | `--no-whisperx --speech-pad X --min-silence Y` |
-
----
-
-## 故障排查
-
-### 问题：无法连接 Ollama
-
-**症状:**
-```
-Cannot connect to Ollama
-Connection refused
-```
-
-**解决方案:**
-
-1. 确认 Ollama 正在运行:
-```bash
-ollama serve
-```
-
-2. 检查 Ollama 服务状态:
-```bash
-curl http://localhost:11434
-```
-
-3. 检查端口是否被占用:
-```bash
-# Linux/macOS
-lsof -i :11434
-
-# Windows
-netstat -ano | findstr 11434
-```
-
-4. 检查防火墙设置，确保 11434 端口未被阻止。
-
----
-
-### 问题：GPU 未检测
-
-**症状:**
-```
-CUDA not available
-Using CPU (slower)
-```
-
-**解决方案:**
-
-1. 运行系统诊断:
-```bash
+# 系统检查
 subtitle-forge config check --verbose
 ```
 
-2. 检查 PyTorch CUDA 支持:
-```bash
-python -c "import torch; print(f'CUDA: {torch.cuda.is_available()}, Version: {torch.version.cuda}')"
-```
+### 配置示例
 
-3. 确认安装了正确版本的 PyTorch（见 [GPU 加速设置](#gpu-加速设置)）
+```yaml
+whisper:
+  model: large-v3            # Whisper 模型
+  device: cuda               # cuda 或 cpu
+  compute_type: float16      # float16, int8_float16, int8
 
-4. 检查 NVIDIA 驱动:
-```bash
-nvidia-smi
+ollama:
+  model: qwen2.5:14b         # 翻译模型
+  host: http://localhost:11434
+  temperature: 0.3
+  max_batch_size: 10
+
+output:
+  encoding: utf-8
+  keep_original: true        # 保留原语言字幕
+  bilingual: false           # 默认双语模式
+
+max_workers: 2               # 并发数
+log_level: INFO
 ```
 
 ---
 
-### 问题：sm_120 不兼容（RTX 50 系列）
+# 三、命令索引
 
-**症状:**
+## process - 完整处理
+
+**功能**：视频 → 音频提取 → 语音识别 → 翻译 → 字幕文件
+
+```bash
+subtitle-forge process <video> -t <target_lang> [options]
 ```
-NVIDIA GeForce RTX 5090 with CUDA capability sm_120 is not compatible with the current PyTorch installation
+
+| 参数 | 简写 | 说明 |
+|------|------|------|
+| `<video>` | - | 视频文件路径（必需） |
+| `--target-lang` | `-t` | 目标语言，可多次指定（必需） |
+| `--source-lang` | `-s` | 源语言（默认自动检测） |
+| `--output-dir` | `-o` | 输出目录（默认视频所在目录） |
+| `--whisper-model` | - | 指定 Whisper 模型 |
+| `--ollama-model` | - | 指定翻译模型 |
+| `--bilingual` | - | 生成双语字幕 |
+| `--whisperx / --no-whisperx` | - | 使用/不使用 WhisperX |
+| `--post-process / --no-post-process` | - | 启用/禁用时间戳后处理 |
+| `--timestamp-mode` | - | 后处理模式：off, minimal, full |
+| `--vad-mode` | - | VAD 预设：default, aggressive, relaxed, precise |
+| `--speech-pad` | - | 语音填充时间（毫秒） |
+| `--min-silence` | - | 最小静音时长（毫秒） |
+| `--prompt-template` | `-p` | 使用指定提示词模板 |
+| `--hf-mirror` | - | HuggingFace 镜像 URL |
+| `--save-debug-log` | - | 保存调试日志 |
+
+**示例**：
+
+```bash
+# 基本用法
+subtitle-forge process movie.mp4 -t zh
+
+# 高质量处理
+subtitle-forge process movie.mp4 -t zh --whisper-model large-v3 --ollama-model qwen2.5:32b
+
+# 使用动漫提示词模板
+subtitle-forge process anime.mp4 -t zh -p anime
+
+# 保存调试日志
+subtitle-forge process movie.mp4 -t zh --save-debug-log
 ```
 
-**原因:** RTX 50 系列使用 Blackwell 架构 (sm_120)，需要 CUDA 12.8+。
+---
 
-**解决方案:**
+## batch - 批量处理
+
+**功能**：批量处理多个视频文件
+
+```bash
+subtitle-forge batch <directory> -t <target_lang> [options]
+```
+
+| 参数 | 简写 | 说明 |
+|------|------|------|
+| `<directory>` | - | 视频目录路径（必需） |
+| `--target-lang` | `-t` | 目标语言（必需） |
+| `--recursive` | `-r` | 递归处理子目录 |
+| `--workers` | `-w` | 并发数（默认 2） |
+| `--file-list` | - | 从文件列表读取 |
+| `--output-dir` | `-o` | 输出目录 |
+
+**示例**：
+
+```bash
+# 处理目录
+subtitle-forge batch ./videos/ -t zh
+
+# 递归处理 + 4 线程
+subtitle-forge batch ./videos/ -t zh -r --workers 4
+
+# 从列表文件处理
+subtitle-forge batch --file-list files.txt -t zh
+```
+
+---
+
+## transcribe - 仅转录
+
+**功能**：语音识别，生成原语言字幕（不翻译）
+
+```bash
+subtitle-forge transcribe <video> [options]
+```
+
+| 参数 | 简写 | 说明 |
+|------|------|------|
+| `<video>` | - | 视频文件路径（必需） |
+| `--output` | `-o` | 输出文件路径 |
+| `--language` | `-l` | 源语言（默认自动检测） |
+| `--model` | `-m` | Whisper 模型 |
+| `--auto-model` | - | 根据 GPU 自动选择模型 |
+| `--whisperx / --no-whisperx` | - | 使用/不使用 WhisperX |
+| `--timestamp-mode` | - | 后处理模式 |
+| `--save-debug-log` | - | 保存调试日志 |
+
+**示例**：
+
+```bash
+# 基本转录
+subtitle-forge transcribe video.mp4
+
+# 指定语言和模型
+subtitle-forge transcribe video.mp4 -l en -m large-v3
+
+# 自动选择最佳模型
+subtitle-forge transcribe video.mp4 --auto-model
+```
+
+---
+
+## translate - 仅翻译
+
+**功能**：翻译现有字幕文件
+
+```bash
+subtitle-forge translate <subtitle> -t <target_lang> [options]
+```
+
+| 参数 | 简写 | 说明 |
+|------|------|------|
+| `<subtitle>` | - | 字幕文件路径（必需） |
+| `--target-lang` | `-t` | 目标语言（必需） |
+| `--source-lang` | `-s` | 源语言 |
+| `--output` | `-o` | 输出文件路径 |
+| `--bilingual` | - | 生成双语字幕 |
+
+**示例**：
+
+```bash
+# 翻译字幕
+subtitle-forge translate video.en.srt -t zh
+
+# 双语字幕
+subtitle-forge translate video.en.srt -t zh --bilingual
+```
+
+---
+
+## config - 配置管理
+
+**功能**：查看和修改配置
+
+| 子命令 | 说明 |
+|--------|------|
+| `show` | 显示当前配置 |
+| `set <key> <value>` | 设置配置项 |
+| `reset` | 重置为默认配置 |
+| `check` | 检查系统环境 |
+| `pull-model` | 下载翻译模型 |
+| `show-prompt` | 显示当前翻译提示词 |
+| `list-prompts` | 列出可用提示词模板 |
+| `use-prompt <id>` | 使用指定模板 |
+| `export-prompt` | 导出提示词 |
+| `set-prompt` | 设置自定义提示词 |
+| `reset-prompt` | 重置为默认提示词 |
+
+**示例**：
+
+```bash
+# 查看配置
+subtitle-forge config show
+
+# 修改模型
+subtitle-forge config set whisper.model large-v3
+subtitle-forge config set ollama.model qwen2.5:32b
+
+# 系统检查
+subtitle-forge config check --verbose
+
+# 下载模型
+subtitle-forge config pull-model
+
+# 使用动漫模板
+subtitle-forge config use-prompt anime
+```
+
+---
+
+## quickstart - 初始化向导
+
+**功能**：首次使用的设置向导
+
+```bash
+subtitle-forge quickstart
+```
+
+向导会自动：
+- 检测系统环境
+- 检查依赖是否安装
+- 下载必要的模型
+- 创建默认配置
+
+---
+
+# 四、故障排查
+
+## 无法连接 Ollama
+
+**症状**：`Cannot connect to Ollama` / `Connection refused`
+
+**解决方案**：
+
+```bash
+# 1. 确认 Ollama 正在运行
+ollama serve
+
+# 2. 检查服务状态
+curl http://localhost:11434
+
+# 3. 检查端口占用
+lsof -i :11434          # Linux/macOS
+netstat -ano | findstr 11434  # Windows
+```
+
+---
+
+## GPU 未识别
+
+**症状**：`CUDA not available` / `Using CPU`
+
+**解决方案**：
+
+```bash
+# 1. 系统诊断
+subtitle-forge config check --verbose
+
+# 2. 检查 PyTorch
+python -c "import torch; print(f'CUDA: {torch.cuda.is_available()}')"
+
+# 3. 检查驱动
+nvidia-smi
+
+# 4. 重新安装正确版本 PyTorch（见 GPU 加速设置）
+```
+
+---
+
+## RTX 50 系列 sm_120 错误
+
+**症状**：`sm_120 is not compatible with the current PyTorch installation`
+
+**解决方案**：
+
 ```bash
 pip uninstall torch torchvision torchaudio -y
 pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu128
@@ -883,205 +677,199 @@ pip install torch torchvision torchaudio --index-url https://download.pytorch.or
 
 ---
 
-### 问题：下载速度慢
+## 下载速度慢
 
-**症状:** Whisper 模型下载非常缓慢
+**症状**：Whisper 模型下载缓慢
 
-**解决方案:** 配置 HuggingFace 镜像（见 [HuggingFace 镜像配置](#huggingface-镜像配置中国用户)）
+**解决方案**：配置 HuggingFace 镜像（见 [HuggingFace 镜像](#huggingface-镜像中国用户)）
 
 ---
 
-### 问题：模型下载中断
+## 模型下载中断
 
-**症状:** 下载过程中网络中断
+**症状**：下载过程中断
 
-**解决方案:**
-
-模型下载支持断点续传，直接重新运行命令即可:
+**解决方案**：直接重新运行命令，支持断点续传
 
 ```bash
-# Ollama 模型
-subtitle-forge config pull-model
-
-# Whisper 模型会在下次处理时自动继续下载
-subtitle-forge process video.mp4 -t zh
+subtitle-forge process video.mp4 -t zh  # Whisper 模型会自动续传
+subtitle-forge config pull-model         # Ollama 模型
 ```
 
 ---
 
-### 问题：翻译速度慢
+## 处理速度慢
 
-**症状:** 翻译过程非常缓慢
+### 转录速度慢
 
-**参考速度:**
-- **有 GPU**: 约 10-20 条字幕/秒
-- **无 GPU**: 约 1-3 条字幕/秒
+**参考速度（GPU）**：1 小时视频约 2-5 分钟
 
-**解决方案:**
+**解决方案**：
 
-1. 检查 GPU 状态:
 ```bash
-subtitle-forge config check
+# 确认 GPU 使用
+nvidia-smi -l 1  # 处理时监控
+
+# 使用较小模型
+subtitle-forge config set whisper.model medium
 ```
 
-2. 使用更小的翻译模型:
+### 翻译速度慢
+
+**参考速度**：GPU 约 10-20 条/秒，CPU 约 1-3 条/秒
+
+**解决方案**：
+
 ```bash
+# 使用较小模型
 subtitle-forge config set ollama.model qwen2.5:7b
 ```
 
 ---
 
-### 问题：转写速度慢
+## 保存调试日志
 
-**症状:** 转写 1 小时视频需要 30+ 分钟
-
-**参考速度 (有 GPU):**
-- 1 小时视频: 约 2-5 分钟
-- 3 小时视频: 约 5-15 分钟
-
-**解决方案:**
-
-1. 确认 GPU 正在使用:
-```bash
-# 处理时另开终端监控
-nvidia-smi -l 1
-```
-
-2. 使用更小的 Whisper 模型:
-```bash
-subtitle-forge config set whisper.model medium
-```
-
----
-
-### 保存调试日志
-
-如果遇到问题需要排查，可以使用 `--save-debug-log` 选项保存完整的调试日志：
+遇到问题时，保存完整日志便于排查：
 
 ```bash
-# 处理视频时保存调试日志
 subtitle-forge process video.mp4 -t zh --save-debug-log
-
-# 仅转录时保存调试日志
-subtitle-forge transcribe video.mp4 --save-debug-log
 ```
 
-使用此选项后，会在输出目录创建 `{视频名}_debug/` 文件夹，包含：
-
-| 文件 | 内容 |
-|------|------|
-| `run.log` | 完整运行日志（DEBUG 级别） |
-| `translation_failures.json` | 翻译失败详情（仅 process 命令） |
-
-**日志文件示例**:
+生成文件：
 
 ```
 output/
-├── video.zh.srt              # 翻译后的字幕
-├── video.ja.srt              # 原始语言字幕
-└── video_debug/              # 调试日志文件夹
-    ├── run.log               # 完整运行日志
+├── video.zh.srt
+└── video_debug/
+    ├── run.log                    # 完整运行日志
     └── translation_failures.json  # 翻译失败详情
 ```
 
-**高级选项**（分开指定）：
-- `--log-file PATH` - 指定日志文件路径
-- `--save-failed-log` - 仅保存翻译失败日志
-
 ---
 
-### 完整系统诊断
+## 完整系统诊断
 
 ```bash
 subtitle-forge config check --verbose
 ```
 
-这会显示:
-- Python 版本
-- PyTorch 和 CUDA 版本
-- GPU 信息和 VRAM
-- Ollama 连接状态
-- 已安装的模型
+显示：Python 版本、PyTorch/CUDA 版本、GPU 信息、Ollama 状态、已安装模型
 
 ---
+
+# 五、附录
 
 ## 支持的语言
 
-subtitle-forge 支持 Whisper 识别的 99+ 种语言，并可翻译为 Ollama 支持的任意语言。
+subtitle-forge 支持 Whisper 识别的 99+ 种语言。
 
 ### 常用语言代码
 
-| 代码 | 语言 |
-|------|------|
-| `en` | English |
-| `zh` | 简体中文 |
-| `zh-TW` | 繁體中文 |
-| `ja` | 日本語 |
-| `ko` | 한국어 |
-| `es` | Español |
-| `fr` | Français |
-| `de` | Deutsch |
-| `ru` | Русский |
-| `pt` | Português |
-| `it` | Italiano |
-| `ar` | العربية |
-| `vi` | Tiếng Việt |
-| `th` | ไทย |
+| 代码 | 语言 | 代码 | 语言 |
+|------|------|------|------|
+| `en` | English | `zh` | 简体中文 |
+| `ja` | 日本語 | `ko` | 한국어 |
+| `es` | Español | `fr` | Français |
+| `de` | Deutsch | `ru` | Русский |
+| `pt` | Português | `it` | Italiano |
+| `ar` | العربية | `vi` | Tiếng Việt |
+| `th` | ไทย | `zh-TW` | 繁體中文 |
 
 ---
 
-## Whisper 模型选择
+## 时间戳后处理
 
-| 模型 | VRAM 需求 | 速度 | 准确度 |
-|------|-----------|------|--------|
-| tiny | ~1 GB | 最快 | 较低 |
-| base | ~1.5 GB | 快 | 一般 |
-| small | ~2.5 GB | 中等 | 较好 |
-| medium | ~5 GB | 较慢 | 高 |
-| large-v3 | ~6 GB | 最慢 | 最高 |
+### 处理模式
 
-### 自动选择模型
+| 模式 | 说明 | 适用场景 |
+|------|------|----------|
+| `off` | 完全禁用 | WhisperX 对齐效果好 |
+| `minimal` | 仅修复重叠和最小时长（**默认**） | 大多数情况 |
+| `full` | 完整处理：分割、延长等 | 需要分割多句话 |
 
-```bash
-# 根据 GPU VRAM 自动选择最佳模型
-subtitle-forge transcribe video.mp4 --auto-model
-```
-
-### 手动指定模型
+### 命令行用法
 
 ```bash
-# 使用 large-v3 获得最高准确度
-subtitle-forge process video.mp4 -t zh --model large-v3
+# 默认 (minimal)
+subtitle-forge process video.mp4 -t zh
 
-# 使用 small 获得更快速度
-subtitle-forge process video.mp4 -t zh --model small
+# 指定模式
+subtitle-forge process video.mp4 -t zh --timestamp-mode off
+subtitle-forge process video.mp4 -t zh --timestamp-mode full
+
+# 完全禁用后处理
+subtitle-forge process video.mp4 -t zh --no-post-process
 ```
+
+### 配置选项
+
+```yaml
+timestamp:
+  enabled: true
+  mode: "minimal"              # off, minimal, full
+  min_duration: 0.5            # 最小时长（秒）
+  max_duration: 8.0            # 最大时长（秒）
+  min_gap: 0.05                # 最小间隙（秒）
+  chars_per_second: 15.0       # 西文阅读速度
+  cjk_chars_per_second: 10.0   # 中日韩阅读速度
+```
+
+### CJK 语言优化
+
+系统自动检测中文、日文、韩文，使用针对性优化：
+- 更慢的阅读速度（10 字/秒 vs 15 字/秒）
+- 更低的分割阈值（15 字符 vs 30 字符）
 
 ---
 
-## 更新方法
+## 翻译提示词配置
 
-### 从 GitHub 更新
+### 内置模板
 
-```bash
-cd subtitle-forge
-git pull origin main
+| 模板 ID | 名称 | 适用场景 |
+|---------|------|----------|
+| `movie-general` | 通用电影 | 大多数电影/电视剧 |
+| `movie-scifi` | 科幻电影 | 科幻、太空题材 |
+| `movie-fantasy` | 奇幻电影 | 魔法、奇幻题材 |
+| `documentary` | 纪录片 | 纪录片、科教片 |
+| `anime` | 动漫 | 日本动漫 |
+| `adult` | 成人内容 | 成人影视 |
+| `technical` | 技术教程 | 编程、软件教程 |
 
-# 清理缓存
-find . -type d -name "__pycache__" -exec rm -rf {} + 2>/dev/null
-
-# 重新安装（如果依赖有变化）
-pip install -e .
-```
-
-### 一键更新
-
-```bash
-cd subtitle-forge && git pull && find . -name "__pycache__" -exec rm -rf {} + 2>/dev/null; pip install -e .
-```
-
-### 查看版本
+### 使用模板
 
 ```bash
-subtitle-forge version
+# 查看可用模板
+subtitle-forge config list-prompts
+
+# 设置默认模板
+subtitle-forge config use-prompt anime
+
+# 临时使用模板
+subtitle-forge process anime.mp4 -t zh -p anime
 ```
+
+### 自定义模板
+
+```bash
+# 1. 导出现有模板
+subtitle-forge config export-prompt -o my_prompt.txt
+
+# 2. 编辑文件
+
+# 3. 应用自定义提示词
+subtitle-forge config set-prompt -f my_prompt.txt
+
+# 4. 重置为默认
+subtitle-forge config reset-prompt
+```
+
+### 可用占位符
+
+| 占位符 | 说明 |
+|--------|------|
+| `{source_lang}` | 源语言名称（必需） |
+| `{target_lang}` | 目标语言名称（必需） |
+| `{segments}` | 要翻译的字幕（必需） |
+| `{context_before}` | 前文上下文 |
+| `{context_after}` | 后文上下文 |
