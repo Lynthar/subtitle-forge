@@ -52,7 +52,7 @@ class TimestampProcessor:
         min_duration: float = 0.5,
         max_duration: float = 8.0,
         min_gap: float = 0.05,
-        max_gap_warning: float = 2.0,
+        max_gap_warning: float = 50.0,
         chars_per_second: float = 15.0,
         split_long_segments: bool = True,
         extend_end_times: bool = True,

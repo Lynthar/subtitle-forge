@@ -720,7 +720,7 @@ class Transcriber:
             min_duration=config.get("min_duration", 0.5),
             max_duration=config.get("max_duration", 8.0),
             min_gap=config.get("min_gap", 0.05),
-            max_gap_warning=config.get("max_gap_warning", 2.0),
+            max_gap_warning=config.get("max_gap_warning", 50.0),
             chars_per_second=config.get("chars_per_second", 15.0),
         )
 

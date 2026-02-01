@@ -15,7 +15,7 @@ class TimestampConfig:
     min_duration: float = 0.5  # Minimum subtitle duration (seconds)
     max_duration: float = 8.0  # Maximum subtitle duration (seconds)
     min_gap: float = 0.05  # Minimum gap between subtitles (seconds)
-    max_gap_warning: float = 2.0  # Gap threshold for missed speech warning (seconds)
+    max_gap_warning: float = 50.0  # Gap threshold for missed speech warning (seconds)
     chars_per_second: float = 15.0  # Reading speed for duration estimation
 
 

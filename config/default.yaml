@@ -61,3 +61,24 @@ log_level: INFO
 
 # Log file path (null = no file logging)
 log_file: null
+
+# Timestamp post-processing settings
+timestamp:
+  # Enable timestamp post-processing
+  enabled: true
+
+  # Minimum subtitle duration in seconds
+  min_duration: 0.5
+
+  # Maximum subtitle duration in seconds
+  max_duration: 8.0
+
+  # Minimum gap between subtitles in seconds
+  min_gap: 0.05
+
+  # Gap threshold for "may indicate missed speech" warning (seconds)
+  # Set higher to reduce warnings for videos with sparse dialogue
+  max_gap_warning: 50.0
+
+  # Estimated reading speed for duration calculation
+  chars_per_second: 15.0
