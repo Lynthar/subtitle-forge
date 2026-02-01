@@ -23,6 +23,9 @@
    - [翻译提示词配置](#翻译提示词配置)
    - [提示词库](#提示词库)
    - [字幕时间轴调整](#字幕时间轴调整)
+     - [WhisperX vs faster-whisper 对比](#whisperx-vs-faster-whisper-对比)
+     - [VAD 预设模式](#预设模式)
+     - [后处理时间戳修正](#后处理时间戳修正)
 5. [故障排查](#故障排查)
 6. [支持的语言](#支持的语言)
 7. [Whisper 模型选择](#whisper-模型选择)
@@ -637,9 +640,49 @@ subtitle-forge config delete-prompt my-scifi
 
 ### 字幕时间轴调整
 
-如果字幕与对话时间不够精确，可以调整 VAD（语音活动检测）参数。
+subtitle-forge 提供两种语音识别后端，各有不同的时间轴优化方式：
 
-#### 预设模式
+#### WhisperX vs faster-whisper 对比
+
+| 特性 | WhisperX（默认） | faster-whisper |
+|------|------------------|----------------|
+| **VAD 引擎** | Pyannote（神经网络） | Silero VAD（轻量级） |
+| **时间戳精度** | 更高（词级强制对齐） | 一般（段落级） |
+| **VAD 参数调整** | 不支持自定义 | 支持自定义 |
+| **处理速度** | 较慢（额外对齐步骤） | 较快 |
+| **依赖** | 需要额外安装 | 内置 |
+
+#### 选择后端
+
+```bash
+# 使用 WhisperX（默认，更精确的时间戳）
+subtitle-forge process video.mp4 -t zh --whisperx
+
+# 使用 faster-whisper（可自定义 VAD 参数）
+subtitle-forge process video.mp4 -t zh --no-whisperx
+```
+
+#### WhisperX 时间轴优化
+
+WhisperX 使用 Pyannote 进行语音活动检测，然后通过 wav2vec2 模型进行强制对齐，获得词级时间戳。这种方式通常能得到更精确的时间轴，但不支持用户自定义 VAD 参数。
+
+**适用场景**：
+- 需要最精确时间戳的场景
+- 音频质量较好的视频
+- 不需要自定义 VAD 参数
+
+**配置选项**（在 config.yaml 中）：
+```yaml
+whisper:
+  use_whisperx: true       # 启用 WhisperX
+  whisperx_align: true     # 启用 wav2vec2 强制对齐（推荐）
+```
+
+#### faster-whisper VAD 参数调整（仅 --no-whisperx 时有效）
+
+使用 `--no-whisperx` 时，可以通过以下参数调整 Silero VAD 的行为：
+
+##### 预设模式
 
 ```bash
 # 默认模式（适合大多数视频）
@@ -674,6 +717,43 @@ subtitle-forge process video.mp4 -t zh --speech-pad 80 --min-silence 400
 参数说明：
 - `--speech-pad`: 语音前后的填充时间（毫秒）。减小此值可使字幕更紧贴对话。
 - `--min-silence`: 最小静音时长（毫秒）。减小此值可创建更多、更短的字幕段落。
+
+#### 后处理时间戳修正
+
+无论使用哪种后端，都可以启用后处理来修正时间戳问题：
+
+```bash
+# 启用后处理（默认开启）
+subtitle-forge process video.mp4 -t zh --post-process
+
+# 禁用后处理
+subtitle-forge process video.mp4 -t zh --no-post-process
+```
+
+后处理会自动修正：
+- 字幕重叠问题
+- 字幕显示时间过长
+- 字幕间隙过小
+
+**配置选项**（在 config.yaml 中）：
+```yaml
+timestamp:
+  enabled: true            # 启用后处理
+  min_duration: 0.5        # 最小字幕时长（秒）
+  max_duration: 8.0        # 最大字幕时长（秒）
+  min_gap: 0.05            # 字幕间最小间隙（秒）
+  chars_per_second: 15.0   # 阅读速度估算（字符/秒）
+```
+
+#### 选择建议
+
+| 场景 | 推荐方案 |
+|------|----------|
+| 一般使用，追求精确时间戳 | `--whisperx`（默认） |
+| 时间戳不够精确，需要微调 | `--no-whisperx --vad-mode precise` |
+| 快节奏对话（动作片） | `--no-whisperx --vad-mode aggressive` |
+| 慢节奏对话（纪录片） | `--no-whisperx --vad-mode relaxed` |
+| 需要精细控制 VAD 参数 | `--no-whisperx --speech-pad X --min-silence Y` |
 
 ---
 
