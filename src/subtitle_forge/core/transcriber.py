@@ -487,7 +487,7 @@ class Transcriber:
         import whisperx
         import torch
 
-        logger.info("Using WhisperX for transcription with forced alignment")
+        logger.debug("Using WhisperX for transcription with forced alignment")
 
         try:
             # Determine device
@@ -498,7 +498,7 @@ class Transcriber:
 
             # Load WhisperX model
             if self._whisperx_model is None:
-                logger.info(f"Loading WhisperX model: {self.model_name}")
+                logger.debug(f"Loading WhisperX model: {self.model_name}")
                 self._whisperx_model = whisperx.load_model(
                     self.model_name,
                     device=device,
@@ -521,7 +521,7 @@ class Transcriber:
 
             # Forced alignment for word-level timestamps
             if self.whisperx_align and result.get("segments"):
-                logger.info("Performing forced alignment with wav2vec2")
+                logger.debug("Performing forced alignment with wav2vec2")
                 try:
                     # Load alignment model
                     if self._whisperx_align_model is None or self._whisperx_metadata is None:
@@ -617,7 +617,7 @@ class Transcriber:
         """Transcribe using faster-whisper."""
         self.load_model()
 
-        logger.info("Using faster-whisper for transcription")
+        logger.debug("Using faster-whisper for transcription")
 
         # Use optimized VAD parameters for better subtitle timing
         vad_params = vad_parameters if vad_parameters is not None else self.DEFAULT_VAD_PARAMETERS

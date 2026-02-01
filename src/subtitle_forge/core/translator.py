@@ -117,6 +117,7 @@ Translated subtitles:"""
         self._client: Optional[Client] = None
         self._model_manager: Optional[OllamaModelManager] = None
         self._failed_translations: List[dict] = []  # Track failed translations
+        self._batch_failure_counts: dict = {}  # Track failure counts per batch for compressed logging
 
     @property
     def client(self) -> Client:
@@ -322,11 +323,12 @@ FOLLOWING DIALOGUE (for context, DO NOT translate):
                 failure_reason = self._analyze_translation_failure(
                     seg, response, index_to_translation
                 )
-                logger.warning(
-                    f"Segment {seg.index} translation not found: {failure_reason}"
-                )
 
-                # Track failed translation for later analysis
+                # Track failure count by reason (for compressed batch logging)
+                self._batch_failure_counts[failure_reason] = \
+                    self._batch_failure_counts.get(failure_reason, 0) + 1
+
+                # Track failed translation for later analysis/log file
                 self._failed_translations.append({
                     "index": seg.index,
                     "original": seg.text,
@@ -429,6 +431,9 @@ FOLLOWING DIALOGUE (for context, DO NOT translate):
         if not segments:
             return []
 
+        # Reset batch failure counts for this batch
+        self._batch_failure_counts = {}
+
         prompt = self._build_translation_prompt(
             segments, source_lang, target_lang,
             context_before=context_before,
@@ -447,6 +452,14 @@ FOLLOWING DIALOGUE (for context, DO NOT translate):
                     response["message"]["content"],
                     segments,
                 )
+
+                # Log compressed summary of failures for this batch
+                if self._batch_failure_counts:
+                    summary = ", ".join(
+                        f"{reason}: {count}"
+                        for reason, count in self._batch_failure_counts.items()
+                    )
+                    logger.warning(f"Batch translation issues: {summary}")
 
                 # Check for failed translations and retry individually
                 failed_segments = [
