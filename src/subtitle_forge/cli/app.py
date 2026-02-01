@@ -178,6 +178,11 @@ def process(
         "--save-failed-log",
         help="Save failed translations to a JSON log file for debugging",
     ),
+    save_debug_log: bool = typer.Option(
+        False,
+        "--save-debug-log",
+        help="Save detailed debug logs and failure reports (creates {video}_debug/ folder)",
+    ),
 ):
     """
     Process a video: extract audio -> transcribe -> translate -> save subtitles
@@ -212,6 +217,18 @@ def process(
 
     output_dir = output_dir or video.parent
     progress = SubtitleProgress()
+
+    # Handle --save-debug-log option
+    debug_dir = None
+    debug_log_path = None
+    debug_failed_log_path = None
+    if save_debug_log:
+        debug_dir = output_dir / f"{video.stem}_debug"
+        debug_dir.mkdir(exist_ok=True)
+        debug_log_path = str(debug_dir / "run.log")
+        debug_failed_log_path = str(debug_dir / "translation_failures.json")
+        # Re-setup logging with DEBUG level to the debug log file
+        setup_logging("DEBUG", debug_log_path)
 
     # Build VAD parameters
     from ..core.transcriber import Transcriber as TranscriberClass
@@ -290,7 +307,15 @@ def process(
             print_info("Whisper model downloaded successfully!\n")
 
         # Initialize translator
-        failed_log_path = str(output_dir / f"{video.stem}_translation_failures.json") if save_failed_log else None
+        # --save-debug-log implies saving failed log to debug directory
+        effective_save_failed_log = save_failed_log or save_debug_log
+        if debug_failed_log_path:
+            failed_log_path = debug_failed_log_path
+        elif save_failed_log:
+            failed_log_path = str(output_dir / f"{video.stem}_translation_failures.json")
+        else:
+            failed_log_path = None
+
         translator = SubtitleTranslator(
             TranslationConfig(
                 model=cfg.ollama.model,
@@ -299,7 +324,7 @@ def process(
                 max_batch_size=cfg.ollama.max_batch_size,
                 prompt_template=cfg.ollama.prompt_template,
                 prompt_template_id=cfg.ollama.prompt_template_id,
-                save_failed_log=save_failed_log,
+                save_failed_log=effective_save_failed_log,
                 failed_log_path=failed_log_path,
             )
         )
