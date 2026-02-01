@@ -26,6 +26,8 @@ class TranslationConfig:
     max_retries: int = 3
     prompt_template: Optional[str] = None  # Custom prompt template (None = use default)
     prompt_template_id: Optional[str] = None  # Reference to prompt library template
+    save_failed_log: bool = False  # Save failed translations to a log file
+    failed_log_path: Optional[str] = None  # Path for failed translations log
 
 
 class SubtitleTranslator:
@@ -114,6 +116,7 @@ Translated subtitles:"""
         self.config = config or TranslationConfig()
         self._client: Optional[Client] = None
         self._model_manager: Optional[OllamaModelManager] = None
+        self._failed_translations: List[dict] = []  # Track failed translations
 
     @property
     def client(self) -> Client:
@@ -260,6 +263,10 @@ FOLLOWING DIALOGUE (for context, DO NOT translate):
         """Parse translation response with multiple fallback patterns."""
         translated = []
 
+        # Log raw response for debugging (truncated)
+        response_preview = response[:500] + "..." if len(response) > 500 else response
+        logger.debug(f"Raw LLM response:\n{response_preview}")
+
         # Try multiple patterns to extract translations
         index_to_translation = {}
 
@@ -311,10 +318,78 @@ FOLLOWING DIALOGUE (for context, DO NOT translate):
                     )
                 )
             else:
-                logger.warning(f"Segment {seg.index} translation not found, keeping original")
+                # Detailed failure analysis
+                failure_reason = self._analyze_translation_failure(
+                    seg, response, index_to_translation
+                )
+                logger.warning(
+                    f"Segment {seg.index} translation not found: {failure_reason}"
+                )
+
+                # Track failed translation for later analysis
+                self._failed_translations.append({
+                    "index": seg.index,
+                    "original": seg.text,
+                    "reason": failure_reason,
+                    "response_snippet": response[:200] if response else "(empty)",
+                })
+
                 translated.append(seg)
 
         return translated
+
+    def _analyze_translation_failure(
+        self,
+        segment: SubtitleSegment,
+        response: str,
+        found_translations: dict,
+    ) -> str:
+        """Analyze why a translation failed and return a descriptive reason."""
+        original_text = segment.text
+
+        # Check for common refusal patterns
+        refusal_patterns = [
+            ("I cannot", "model_refusal"),
+            ("I can't", "model_refusal"),
+            ("I'm sorry", "model_refusal"),
+            ("不能翻译", "model_refusal"),
+            ("无法翻译", "model_refusal"),
+            ("不适合", "content_filter"),
+            ("inappropriate", "content_filter"),
+            ("sensitive", "content_filter"),
+            ("违规", "content_filter"),
+        ]
+
+        response_lower = response.lower()
+        for pattern, reason_type in refusal_patterns:
+            if pattern.lower() in response_lower:
+                if reason_type == "model_refusal":
+                    return f"模型拒绝翻译 (检测到: '{pattern}')"
+                else:
+                    return f"内容被过滤 (检测到: '{pattern}')"
+
+        # Check if response is empty or too short
+        if not response.strip():
+            return "LLM返回空响应"
+
+        if len(response.strip()) < 10:
+            return f"LLM响应过短: '{response.strip()[:50]}'"
+
+        # Check if the segment index pattern is missing
+        if f"[{segment.index}]" not in response and str(segment.index) not in response:
+            return f"响应中未找到段落索引 [{segment.index}]"
+
+        # Check if original text might be problematic
+        if len(original_text) < 3:
+            return f"原文过短: '{original_text}'"
+
+        # Check for interjections that models often skip
+        interjection_patterns = ["あぁ", "うん", "ああ", "えっ", "んん", "はぁ"]
+        if any(p in original_text for p in interjection_patterns):
+            return f"可能是语气词被跳过: '{original_text[:20]}'"
+
+        # Default - parsing issue
+        return f"解析失败 (已解析 {len(found_translations)} 个, 原文: '{original_text[:30]}...')"
 
     def _clean_translation(self, translated: str, original: str) -> str:
         """Clean up translation text."""
@@ -493,5 +568,83 @@ FOLLOWING DIALOGUE (for context, DO NOT translate):
             if progress_callback:
                 progress_callback(len(translated_segments), len(segments))
 
-        logger.info(f"Translation complete: {len(translated_segments)} segments")
+        # Count and report failures
+        failed_count = sum(
+            1 for orig, trans in zip(segments, translated_segments)
+            if orig.text == trans.text
+        )
+
+        if failed_count > 0:
+            logger.warning(
+                f"Translation complete: {len(translated_segments)} segments, "
+                f"{failed_count} failed ({failed_count * 100 // len(segments)}%)"
+            )
+
+            # Save failed translations log if enabled
+            if self.config.save_failed_log and self._failed_translations:
+                self._save_failed_log()
+        else:
+            logger.info(f"Translation complete: {len(translated_segments)} segments")
+
         return translated_segments
+
+    def _save_failed_log(self) -> None:
+        """Save failed translations to a log file for analysis."""
+        import json
+        from pathlib import Path
+        from datetime import datetime
+
+        # Determine log path
+        if self.config.failed_log_path:
+            log_path = Path(self.config.failed_log_path)
+        else:
+            log_path = Path.cwd() / f"translation_failures_{datetime.now():%Y%m%d_%H%M%S}.json"
+
+        try:
+            # Categorize failures
+            categorized = {
+                "model_refusal": [],
+                "content_filter": [],
+                "parsing_error": [],
+                "other": [],
+            }
+
+            for failure in self._failed_translations:
+                reason = failure.get("reason", "")
+                if "拒绝" in reason:
+                    categorized["model_refusal"].append(failure)
+                elif "过滤" in reason or "content" in reason.lower():
+                    categorized["content_filter"].append(failure)
+                elif "解析" in reason or "parsing" in reason.lower():
+                    categorized["parsing_error"].append(failure)
+                else:
+                    categorized["other"].append(failure)
+
+            report = {
+                "timestamp": datetime.now().isoformat(),
+                "model": self.config.model,
+                "total_failures": len(self._failed_translations),
+                "summary": {
+                    "model_refusal": len(categorized["model_refusal"]),
+                    "content_filter": len(categorized["content_filter"]),
+                    "parsing_error": len(categorized["parsing_error"]),
+                    "other": len(categorized["other"]),
+                },
+                "failures": self._failed_translations,
+            }
+
+            with open(log_path, "w", encoding="utf-8") as f:
+                json.dump(report, f, ensure_ascii=False, indent=2)
+
+            logger.info(f"Failed translations log saved: {log_path}")
+
+        except Exception as e:
+            logger.error(f"Failed to save translation log: {e}")
+
+    def get_failed_translations(self) -> List[dict]:
+        """Get list of failed translations for external analysis."""
+        return self._failed_translations.copy()
+
+    def clear_failed_translations(self) -> None:
+        """Clear the failed translations list."""
+        self._failed_translations = []
