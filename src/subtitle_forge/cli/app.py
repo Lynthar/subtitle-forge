@@ -163,6 +163,11 @@ def process(
         "--post-process/--no-post-process",
         help="Enable timestamp post-processing to fix timing issues",
     ),
+    hf_mirror: Optional[str] = typer.Option(
+        None,
+        "--hf-mirror",
+        help="HuggingFace mirror URL (e.g., https://hf-mirror.com)",
+    ),
 ):
     """
     Process a video: extract audio -> transcribe -> translate -> save subtitles
@@ -213,6 +218,9 @@ def process(
         whisperx_enabled = use_whisperx if use_whisperx is not None else cfg.whisper.use_whisperx
 
         # Initialize transcriber
+        # Determine HuggingFace endpoint (CLI option takes precedence)
+        hf_endpoint = hf_mirror or cfg.whisper.hf_endpoint
+
         transcriber = Transcriber(
             model_name=cfg.whisper.model,
             device=cfg.whisper.device,
@@ -220,6 +228,7 @@ def process(
             use_whisperx=whisperx_enabled,
             whisperx_align=cfg.whisper.whisperx_align,
             hf_token=cfg.whisper.hf_token,
+            hf_endpoint=hf_endpoint,
         )
 
         # Log which backend will be used

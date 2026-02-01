@@ -121,6 +121,7 @@ class Transcriber:
         use_whisperx: bool = True,
         whisperx_align: bool = True,
         hf_token: Optional[str] = None,
+        hf_endpoint: Optional[str] = None,
     ):
         """
         Initialize transcriber.
@@ -133,6 +134,7 @@ class Transcriber:
             use_whisperx: Use WhisperX for better timestamp accuracy.
             whisperx_align: Enable forced alignment with wav2vec2.
             hf_token: HuggingFace token for pyannote models.
+            hf_endpoint: HuggingFace mirror endpoint (e.g., "https://hf-mirror.com").
         """
         self.model_name = model_name
         self.device = device
@@ -140,6 +142,12 @@ class Transcriber:
         self.download_root = download_root
         self.whisperx_align = whisperx_align
         self.hf_token = hf_token
+        self.hf_endpoint = hf_endpoint
+
+        # Set HuggingFace mirror endpoint if provided
+        if hf_endpoint:
+            os.environ["HF_ENDPOINT"] = hf_endpoint
+            logger.info(f"Using HuggingFace mirror: {hf_endpoint}")
 
         # Determine if WhisperX should be used
         self.use_whisperx = _should_use_whisperx(use_whisperx)

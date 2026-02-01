@@ -96,6 +96,7 @@ def transcribe_video(
             use_whisperx=whisperx_enabled,
             whisperx_align=config.whisper.whisperx_align,
             hf_token=config.whisper.hf_token,
+            hf_endpoint=config.whisper.hf_endpoint,
         )
 
         # Log which backend will be used
