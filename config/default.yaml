@@ -61,3 +61,37 @@ log_level: INFO
 
 # Log file path (null = no file logging)
 log_file: null
+
+# Timestamp post-processing settings
+timestamp:
+  # Enable timestamp post-processing
+  enabled: true
+
+  # Processing mode:
+  #   "off"     - No processing, trust WhisperX output completely
+  #   "minimal" - Only fix overlaps and ensure minimum duration (recommended)
+  #   "full"    - Complete processing: split segments, extend times, fix all issues
+  mode: "minimal"
+
+  # Minimum subtitle duration in seconds
+  min_duration: 0.5
+
+  # Maximum subtitle duration in seconds
+  max_duration: 8.0
+
+  # Minimum gap between subtitles in seconds
+  min_gap: 0.05
+
+  # Gap threshold for "may indicate missed speech" warning (seconds)
+  # Set higher to reduce warnings for videos with sparse dialogue
+  max_gap_warning: 50.0
+
+  # Reading speed for Western languages (chars per second)
+  chars_per_second: 15.0
+
+  # Reading speed for CJK languages (Chinese/Japanese/Korean)
+  # CJK characters are denser, so use slower speed
+  cjk_chars_per_second: 10.0
+
+  # Minimum text length before attempting to split segments (full mode only)
+  split_threshold: 30
