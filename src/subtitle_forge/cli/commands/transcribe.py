@@ -61,6 +61,11 @@ def transcribe_video(
         "--timestamp-mode",
         help="Timestamp processing mode: off, minimal (default), full",
     ),
+    save_debug_log: bool = typer.Option(
+        False,
+        "--save-debug-log",
+        help="Save detailed debug logs (creates {video}_debug/ folder)",
+    ),
 ):
     """
     Transcribe video audio to subtitles (no translation).
@@ -74,12 +79,21 @@ def transcribe_video(
     from ...core.subtitle import SubtitleProcessor
     from ...models.config import AppConfig
     from ...utils.progress import SubtitleProgress, print_success, print_error, print_info
+    from ...utils.logger import setup_logging
 
     from rich.console import Console
 
     config = AppConfig.load()
     progress = SubtitleProgress()
     console = Console()
+
+    # Handle --save-debug-log option
+    if save_debug_log:
+        output_dir = video.parent
+        debug_dir = output_dir / f"{video.stem}_debug"
+        debug_dir.mkdir(exist_ok=True)
+        debug_log_path = str(debug_dir / "run.log")
+        setup_logging("DEBUG", debug_log_path)
 
     # Model selection
     if auto_model:

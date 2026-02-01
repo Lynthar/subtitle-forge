@@ -720,29 +720,74 @@ subtitle-forge process video.mp4 -t zh --speech-pad 80 --min-silence 400
 
 #### 后处理时间戳修正
 
-无论使用哪种后端，都可以启用后处理来修正时间戳问题：
+无论使用哪种后端，都可以启用后处理来修正时间戳问题。后处理支持三种模式：
+
+##### 处理模式
+
+| 模式 | 说明 | 适用场景 |
+|------|------|----------|
+| `off` | 完全禁用，信任 WhisperX 原始输出 | WhisperX 对齐效果好时 |
+| `minimal` | 仅修复重叠和最小时长（**默认**） | 大多数情况 |
+| `full` | 完整处理：分割长段落、延长短段落等 | 需要分割多句话时 |
+
+##### 命令行用法
 
 ```bash
-# 启用后处理（默认开启）
-subtitle-forge process video.mp4 -t zh --post-process
+# 使用默认模式 (minimal)
+subtitle-forge process video.mp4 -t zh
 
-# 禁用后处理
+# 明确指定模式
+subtitle-forge process video.mp4 -t zh --timestamp-mode minimal
+
+# 完全信任 WhisperX 输出
+subtitle-forge process video.mp4 -t zh --timestamp-mode off
+
+# 完整处理（分割长段落）
+subtitle-forge process video.mp4 -t zh --timestamp-mode full
+
+# 完全禁用后处理
 subtitle-forge process video.mp4 -t zh --no-post-process
 ```
 
-后处理会自动修正：
-- 字幕重叠问题
-- 字幕显示时间过长
-- 字幕间隙过小
+##### 模式详细说明
 
-**配置选项**（在 config.yaml 中）：
+**`minimal` 模式（推荐）**
+- 修复字幕重叠
+- 确保最小显示时长
+- 不分割或延长段落
+- 最大程度保留 WhisperX 原始时间戳
+
+**`off` 模式**
+- 完全不处理
+- 适合 WhisperX 对齐效果已经很好的情况
+
+**`full` 模式**
+- 分割多句话段落
+- 根据文字长度延长显示时间
+- 修复所有时间问题
+- 可能会改变原始时间戳
+
+##### CJK 语言优化
+
+系统会自动检测中文、日文、韩文，并使用针对性优化：
+- 使用更慢的阅读速度（10 字/秒 vs 西文 15 字/秒）
+- 使用更低的分割阈值（15 字符 vs 西文 30 字符）
+
+##### 配置选项
+
+在 `config.yaml` 中可以配置：
+
 ```yaml
 timestamp:
-  enabled: true            # 启用后处理
-  min_duration: 0.5        # 最小字幕时长（秒）
-  max_duration: 8.0        # 最大字幕时长（秒）
-  min_gap: 0.05            # 字幕间最小间隙（秒）
-  chars_per_second: 15.0   # 阅读速度估算（字符/秒）
+  enabled: true              # 启用后处理
+  mode: "minimal"            # 处理模式: off, minimal, full
+  min_duration: 0.5          # 最小字幕时长（秒）
+  max_duration: 8.0          # 最大字幕时长（秒）
+  min_gap: 0.05              # 字幕间最小间隙（秒）
+  max_gap_warning: 50.0      # 大间隙警告阈值（秒）
+  chars_per_second: 15.0     # 西文阅读速度（字符/秒）
+  cjk_chars_per_second: 10.0 # 中日韩阅读速度（字符/秒）
+  split_threshold: 30        # 分割阈值（字符数，仅 full 模式）
 ```
 
 #### 选择建议
@@ -906,6 +951,42 @@ nvidia-smi -l 1
 ```bash
 subtitle-forge config set whisper.model medium
 ```
+
+---
+
+### 保存调试日志
+
+如果遇到问题需要排查，可以使用 `--save-debug-log` 选项保存完整的调试日志：
+
+```bash
+# 处理视频时保存调试日志
+subtitle-forge process video.mp4 -t zh --save-debug-log
+
+# 仅转录时保存调试日志
+subtitle-forge transcribe video.mp4 --save-debug-log
+```
+
+使用此选项后，会在输出目录创建 `{视频名}_debug/` 文件夹，包含：
+
+| 文件 | 内容 |
+|------|------|
+| `run.log` | 完整运行日志（DEBUG 级别） |
+| `translation_failures.json` | 翻译失败详情（仅 process 命令） |
+
+**日志文件示例**:
+
+```
+output/
+├── video.zh.srt              # 翻译后的字幕
+├── video.ja.srt              # 原始语言字幕
+└── video_debug/              # 调试日志文件夹
+    ├── run.log               # 完整运行日志
+    └── translation_failures.json  # 翻译失败详情
+```
+
+**高级选项**（分开指定）：
+- `--log-file PATH` - 指定日志文件路径
+- `--save-failed-log` - 仅保存翻译失败日志
 
 ---
 
