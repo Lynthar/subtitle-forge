@@ -587,7 +587,8 @@ class Transcriber:
             # Apply post-processing
             if post_process:
                 segments = self._apply_post_processing(
-                    segments, audio_duration, timestamp_config, audio_path
+                    segments, audio_duration, timestamp_config, audio_path,
+                    language=detected_language,
                 )
 
             logger.info(
@@ -691,7 +692,8 @@ class Transcriber:
             # Apply post-processing
             if post_process:
                 segments = self._apply_post_processing(
-                    segments, audio_duration, timestamp_config, audio_path
+                    segments, audio_duration, timestamp_config, audio_path,
+                    language=info.language,
                 )
 
             logger.info(
@@ -711,17 +713,22 @@ class Transcriber:
         audio_duration: float,
         timestamp_config: Optional[dict] = None,
         audio_path: Optional[Path] = None,
+        language: Optional[str] = None,
     ) -> List[SubtitleSegment]:
         """Apply timestamp post-processing."""
         from .timestamp_processor import TimestampProcessor
 
         config = timestamp_config or {}
         processor = TimestampProcessor(
+            mode=config.get("mode", "minimal"),
+            language=language,
             min_duration=config.get("min_duration", 0.5),
             max_duration=config.get("max_duration", 8.0),
             min_gap=config.get("min_gap", 0.05),
             max_gap_warning=config.get("max_gap_warning", 50.0),
             chars_per_second=config.get("chars_per_second", 15.0),
+            cjk_chars_per_second=config.get("cjk_chars_per_second", 10.0),
+            split_threshold=config.get("split_threshold", 30),
         )
 
         return processor.process(segments, audio_duration)

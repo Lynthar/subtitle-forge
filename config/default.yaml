@@ -67,6 +67,12 @@ timestamp:
   # Enable timestamp post-processing
   enabled: true
 
+  # Processing mode:
+  #   "off"     - No processing, trust WhisperX output completely
+  #   "minimal" - Only fix overlaps and ensure minimum duration (recommended)
+  #   "full"    - Complete processing: split segments, extend times, fix all issues
+  mode: "minimal"
+
   # Minimum subtitle duration in seconds
   min_duration: 0.5
 
@@ -80,5 +86,12 @@ timestamp:
   # Set higher to reduce warnings for videos with sparse dialogue
   max_gap_warning: 50.0
 
-  # Estimated reading speed for duration calculation
+  # Reading speed for Western languages (chars per second)
   chars_per_second: 15.0
+
+  # Reading speed for CJK languages (Chinese/Japanese/Korean)
+  # CJK characters are denser, so use slower speed
+  cjk_chars_per_second: 10.0
+
+  # Minimum text length before attempting to split segments (full mode only)
+  split_threshold: 30
