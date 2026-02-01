@@ -56,6 +56,11 @@ def transcribe_video(
         "--post-process/--no-post-process",
         help="Enable timestamp post-processing to fix timing issues",
     ),
+    timestamp_mode: Optional[str] = typer.Option(
+        None,
+        "--timestamp-mode",
+        help="Timestamp processing mode: off, minimal (default), full",
+    ),
 ):
     """
     Transcribe video audio to subtitles (no translation).
@@ -161,11 +166,14 @@ def transcribe_video(
 
             # Build timestamp config from settings
             timestamp_config = {
+                "mode": timestamp_mode or config.timestamp.mode,
                 "min_duration": config.timestamp.min_duration,
                 "max_duration": config.timestamp.max_duration,
                 "min_gap": config.timestamp.min_gap,
                 "max_gap_warning": config.timestamp.max_gap_warning,
                 "chars_per_second": config.timestamp.chars_per_second,
+                "cjk_chars_per_second": config.timestamp.cjk_chars_per_second,
+                "split_threshold": config.timestamp.split_threshold,
             } if post_process and config.timestamp.enabled else None
 
             segments, info = transcriber.transcribe(

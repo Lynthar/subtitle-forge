@@ -40,20 +40,26 @@ class TimestampProcessor:
     """
     Post-processor for subtitle timestamps.
 
-    Fixes common timing issues:
-    - Overlapping segments
-    - Excessively long display durations
-    - Missing gaps between segments
-    - Timestamps exceeding audio duration
+    Supports three processing modes:
+    - "off": No processing, trust WhisperX output
+    - "minimal": Only fix overlaps and ensure minimum duration
+    - "full": Complete processing (split, extend, fix all issues)
     """
+
+    # CJK language codes
+    CJK_LANGUAGES = {'zh', 'ja', 'ko', 'chinese', 'japanese', 'korean', 'yue', 'wuu'}
 
     def __init__(
         self,
+        mode: str = "minimal",
+        language: Optional[str] = None,
         min_duration: float = 0.5,
         max_duration: float = 8.0,
         min_gap: float = 0.05,
         max_gap_warning: float = 50.0,
         chars_per_second: float = 15.0,
+        cjk_chars_per_second: float = 10.0,
+        split_threshold: int = 30,
         split_long_segments: bool = True,
         extend_end_times: bool = True,
     ):
@@ -61,23 +67,52 @@ class TimestampProcessor:
         Initialize timestamp processor.
 
         Args:
+            mode: Processing mode - "off", "minimal", or "full".
+            language: Detected language code for CJK optimization.
             min_duration: Minimum subtitle duration in seconds.
             max_duration: Maximum subtitle duration in seconds.
             min_gap: Minimum gap between subtitles in seconds.
             max_gap_warning: Gap threshold for potential missed speech warning.
-            chars_per_second: Estimated reading speed for duration calculation.
-            split_long_segments: Split segments containing multiple sentences.
-            extend_end_times: Extend end times based on text length when no word timestamps.
+            chars_per_second: Reading speed for Western languages.
+            cjk_chars_per_second: Reading speed for CJK languages.
+            split_threshold: Minimum characters before attempting split.
+            split_long_segments: Split segments containing multiple sentences (full mode only).
+            extend_end_times: Extend end times based on text length (full mode only).
         """
+        self.mode = mode
+        self.language = language
         self.min_duration = min_duration
         self.max_duration = max_duration
         self.min_gap = min_gap
         self.max_gap_warning = max_gap_warning
         self.chars_per_second = chars_per_second
+        self.cjk_chars_per_second = cjk_chars_per_second
+        self.split_threshold = split_threshold
         self.split_long_segments = split_long_segments
         self.extend_end_times = extend_end_times
         self._issues: List[TimestampIssue] = []
         self._gaps: List[GapInfo] = []
+
+        # Select effective reading speed based on language
+        if self._is_cjk_language(language):
+            self._effective_cps = cjk_chars_per_second
+            logger.debug(f"Using CJK reading speed: {cjk_chars_per_second} chars/sec")
+        else:
+            self._effective_cps = chars_per_second
+
+    @classmethod
+    def _is_cjk_language(cls, language: Optional[str]) -> bool:
+        """Check if language is CJK (Chinese, Japanese, Korean)."""
+        if not language:
+            return False
+        return language.lower() in cls.CJK_LANGUAGES
+
+    def _get_split_threshold(self) -> int:
+        """Get language-appropriate split threshold."""
+        if self._is_cjk_language(self.language):
+            # CJK characters are denser, use lower threshold
+            return max(15, self.split_threshold // 2)
+        return self.split_threshold
 
     def process(
         self,
@@ -85,7 +120,7 @@ class TimestampProcessor:
         audio_duration: Optional[float] = None,
     ) -> List[SubtitleSegment]:
         """
-        Execute full post-processing pipeline.
+        Execute post-processing pipeline based on mode.
 
         Args:
             segments: List of subtitle segments to process.
@@ -100,8 +135,24 @@ class TimestampProcessor:
         if not segments:
             return segments
 
+        # Mode: off - trust WhisperX output completely
+        if self.mode == "off":
+            logger.debug("Timestamp processing mode: off (no processing)")
+            return self._reindex(segments)
+
+        # Mode: minimal - only essential fixes
+        if self.mode == "minimal":
+            logger.debug("Timestamp processing mode: minimal")
+            segments = self._fix_overlaps(segments)
+            segments = self._ensure_minimum_duration(segments)
+            if audio_duration:
+                segments = self._clamp_to_duration(segments, audio_duration)
+            return self._reindex(segments)
+
+        # Mode: full - complete processing (original behavior)
+        logger.debug("Timestamp processing mode: full")
+
         # 0. Pre-processing for segments without word-level timestamps
-        # This helps when forced alignment fails
         if self.split_long_segments:
             segments = self._split_multi_sentence_segments(segments)
 
@@ -244,7 +295,7 @@ class TimestampProcessor:
                 # Estimate reasonable duration based on text length
                 chars = len(seg.text)
                 estimated_duration = max(
-                    self.min_duration, min(chars / self.chars_per_second, self.max_duration)
+                    self.min_duration, min(chars / self._effective_cps, self.max_duration)
                 )
 
                 new_end = seg.start + estimated_duration
@@ -423,8 +474,9 @@ class TimestampProcessor:
                 result.append(seg)
                 continue
 
-            # Skip short segments
-            if len(seg.text) < 30:
+            # Skip short segments (use language-aware threshold)
+            threshold = self._get_split_threshold()
+            if len(seg.text) < threshold:
                 result.append(seg)
                 continue
 
@@ -527,11 +579,11 @@ class TimestampProcessor:
                 continue
 
             # Calculate minimum required duration based on text length
-            # Using a slightly slower reading speed for subtitle display
+            # Using language-appropriate reading speed
             chars = len(seg.text)
             min_required_duration = max(
                 self.min_duration,
-                chars / self.chars_per_second
+                chars / self._effective_cps
             )
 
             current_duration = seg.end - seg.start

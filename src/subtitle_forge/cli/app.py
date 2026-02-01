@@ -163,6 +163,11 @@ def process(
         "--post-process/--no-post-process",
         help="Enable timestamp post-processing to fix timing issues",
     ),
+    timestamp_mode: Optional[str] = typer.Option(
+        None,
+        "--timestamp-mode",
+        help="Timestamp processing mode: off, minimal (default), full",
+    ),
     hf_mirror: Optional[str] = typer.Option(
         None,
         "--hf-mirror",
@@ -348,11 +353,14 @@ def process(
 
             # Build timestamp config from settings
             timestamp_config = {
+                "mode": timestamp_mode or cfg.timestamp.mode,
                 "min_duration": cfg.timestamp.min_duration,
                 "max_duration": cfg.timestamp.max_duration,
                 "min_gap": cfg.timestamp.min_gap,
                 "max_gap_warning": cfg.timestamp.max_gap_warning,
                 "chars_per_second": cfg.timestamp.chars_per_second,
+                "cjk_chars_per_second": cfg.timestamp.cjk_chars_per_second,
+                "split_threshold": cfg.timestamp.split_threshold,
             } if post_process and cfg.timestamp.enabled else None
 
             segments, info = transcriber.transcribe(

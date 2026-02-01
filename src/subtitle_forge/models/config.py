@@ -12,11 +12,14 @@ class TimestampConfig:
     """Timestamp post-processing configuration."""
 
     enabled: bool = True  # Enable timestamp post-processing
+    mode: str = "minimal"  # Processing mode: "off", "minimal", "full"
     min_duration: float = 0.5  # Minimum subtitle duration (seconds)
     max_duration: float = 8.0  # Maximum subtitle duration (seconds)
     min_gap: float = 0.05  # Minimum gap between subtitles (seconds)
     max_gap_warning: float = 50.0  # Gap threshold for missed speech warning (seconds)
-    chars_per_second: float = 15.0  # Reading speed for duration estimation
+    chars_per_second: float = 15.0  # Reading speed for Western languages
+    cjk_chars_per_second: float = 10.0  # Reading speed for CJK languages
+    split_threshold: int = 30  # Minimum characters before attempting split
 
 
 @dataclass
@@ -148,11 +151,14 @@ class AppConfig:
             },
             "timestamp": {
                 "enabled": self.timestamp.enabled,
+                "mode": self.timestamp.mode,
                 "min_duration": self.timestamp.min_duration,
                 "max_duration": self.timestamp.max_duration,
                 "min_gap": self.timestamp.min_gap,
                 "max_gap_warning": self.timestamp.max_gap_warning,
                 "chars_per_second": self.timestamp.chars_per_second,
+                "cjk_chars_per_second": self.timestamp.cjk_chars_per_second,
+                "split_threshold": self.timestamp.split_threshold,
             },
             "max_workers": self.max_workers,
             "log_level": self.log_level,
@@ -197,9 +203,14 @@ class AppConfig:
             },
             "timestamp": {
                 "enabled": self.timestamp.enabled,
+                "mode": self.timestamp.mode,
                 "min_duration": self.timestamp.min_duration,
                 "max_duration": self.timestamp.max_duration,
                 "min_gap": self.timestamp.min_gap,
+                "max_gap_warning": self.timestamp.max_gap_warning,
+                "chars_per_second": self.timestamp.chars_per_second,
+                "cjk_chars_per_second": self.timestamp.cjk_chars_per_second,
+                "split_threshold": self.timestamp.split_threshold,
             },
             "max_workers": self.max_workers,
             "log_level": self.log_level,
