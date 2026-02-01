@@ -168,6 +168,11 @@ def process(
         "--hf-mirror",
         help="HuggingFace mirror URL (e.g., https://hf-mirror.com)",
     ),
+    save_failed_log: bool = typer.Option(
+        False,
+        "--save-failed-log",
+        help="Save failed translations to a JSON log file for debugging",
+    ),
 ):
     """
     Process a video: extract audio -> transcribe -> translate -> save subtitles
@@ -280,6 +285,7 @@ def process(
             print_info("Whisper model downloaded successfully!\n")
 
         # Initialize translator
+        failed_log_path = str(output_dir / f"{video.stem}_translation_failures.json") if save_failed_log else None
         translator = SubtitleTranslator(
             TranslationConfig(
                 model=cfg.ollama.model,
@@ -288,6 +294,8 @@ def process(
                 max_batch_size=cfg.ollama.max_batch_size,
                 prompt_template=cfg.ollama.prompt_template,
                 prompt_template_id=cfg.ollama.prompt_template_id,
+                save_failed_log=save_failed_log,
+                failed_log_path=failed_log_path,
             )
         )
 
