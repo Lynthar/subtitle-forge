@@ -3,10 +3,16 @@
 from dataclasses import dataclass
 from typing import List, Optional
 import logging
+import re
 
 from ..models.subtitle import SubtitleSegment
 
 logger = logging.getLogger(__name__)
+
+# Sentence-ending patterns for different languages
+SENTENCE_ENDINGS = re.compile(r'([。！？!?\.\n]+)')
+# Japanese/Chinese specific sentence endings
+CJK_SENTENCE_ENDINGS = re.compile(r'([。！？」』）]+)')
 
 
 @dataclass
@@ -48,6 +54,8 @@ class TimestampProcessor:
         min_gap: float = 0.05,
         max_gap_warning: float = 2.0,
         chars_per_second: float = 15.0,
+        split_long_segments: bool = True,
+        extend_end_times: bool = True,
     ):
         """
         Initialize timestamp processor.
@@ -58,12 +66,16 @@ class TimestampProcessor:
             min_gap: Minimum gap between subtitles in seconds.
             max_gap_warning: Gap threshold for potential missed speech warning.
             chars_per_second: Estimated reading speed for duration calculation.
+            split_long_segments: Split segments containing multiple sentences.
+            extend_end_times: Extend end times based on text length when no word timestamps.
         """
         self.min_duration = min_duration
         self.max_duration = max_duration
         self.min_gap = min_gap
         self.max_gap_warning = max_gap_warning
         self.chars_per_second = chars_per_second
+        self.split_long_segments = split_long_segments
+        self.extend_end_times = extend_end_times
         self._issues: List[TimestampIssue] = []
         self._gaps: List[GapInfo] = []
 
@@ -87,6 +99,14 @@ class TimestampProcessor:
 
         if not segments:
             return segments
+
+        # 0. Pre-processing for segments without word-level timestamps
+        # This helps when forced alignment fails
+        if self.split_long_segments:
+            segments = self._split_multi_sentence_segments(segments)
+
+        if self.extend_end_times:
+            segments = self._extend_segment_end_times(segments)
 
         # 1. Validate and record issues
         self._validate(segments, audio_duration)
@@ -385,6 +405,163 @@ class TimestampProcessor:
             )
             for i, seg in enumerate(segments)
         ]
+
+    def _split_multi_sentence_segments(
+        self, segments: List[SubtitleSegment]
+    ) -> List[SubtitleSegment]:
+        """
+        Split segments containing multiple sentences into separate segments.
+
+        This is particularly useful when forced alignment fails and Whisper
+        returns long segments with multiple sentences grouped together.
+        """
+        result = []
+
+        for seg in segments:
+            # Skip if segment has word-level timestamps (alignment worked)
+            if seg.has_word_timestamps():
+                result.append(seg)
+                continue
+
+            # Skip short segments
+            if len(seg.text) < 30:
+                result.append(seg)
+                continue
+
+            # Try to split by sentence endings
+            sentences = self._split_into_sentences(seg.text)
+
+            if len(sentences) <= 1:
+                result.append(seg)
+                continue
+
+            # Distribute time proportionally across sentences
+            total_chars = sum(len(s) for s in sentences)
+            total_duration = seg.end - seg.start
+            current_time = seg.start
+
+            for i, sentence in enumerate(sentences):
+                # Calculate duration based on character ratio
+                char_ratio = len(sentence) / total_chars if total_chars > 0 else 1.0 / len(sentences)
+                duration = total_duration * char_ratio
+
+                # Ensure minimum duration
+                duration = max(duration, self.min_duration)
+
+                # Calculate end time
+                end_time = current_time + duration
+
+                # Don't exceed original segment end for last sentence
+                if i == len(sentences) - 1:
+                    end_time = seg.end
+
+                result.append(
+                    SubtitleSegment(
+                        index=len(result) + 1,
+                        start=current_time,
+                        end=end_time,
+                        text=sentence.strip(),
+                    )
+                )
+
+                current_time = end_time
+
+            logger.debug(f"Split segment {seg.index} into {len(sentences)} parts")
+
+        return result
+
+    def _split_into_sentences(self, text: str) -> List[str]:
+        """
+        Split text into sentences based on punctuation.
+
+        Handles both Western and CJK punctuation.
+        """
+        # First try CJK sentence endings
+        if any('\u4e00' <= c <= '\u9fff' or '\u3040' <= c <= '\u30ff' for c in text):
+            # Contains CJK characters, use CJK pattern
+            parts = CJK_SENTENCE_ENDINGS.split(text)
+        else:
+            # Use standard sentence endings
+            parts = SENTENCE_ENDINGS.split(text)
+
+        # Recombine parts (pattern split separates delimiters)
+        sentences = []
+        current = ""
+
+        for part in parts:
+            current += part
+            # Check if this part is a sentence ending
+            if SENTENCE_ENDINGS.match(part) or CJK_SENTENCE_ENDINGS.match(part):
+                if current.strip():
+                    sentences.append(current.strip())
+                current = ""
+
+        # Add remaining text if any
+        if current.strip():
+            sentences.append(current.strip())
+
+        # Filter out empty sentences and very short ones
+        sentences = [s for s in sentences if len(s) >= 2]
+
+        return sentences if sentences else [text]
+
+    def _extend_segment_end_times(
+        self, segments: List[SubtitleSegment]
+    ) -> List[SubtitleSegment]:
+        """
+        Extend segment end times based on text length.
+
+        When forced alignment fails, segment end times may be too short.
+        This method extends end times based on estimated reading time,
+        while respecting the next segment's start time.
+        """
+        if not segments:
+            return segments
+
+        result = []
+
+        for i, seg in enumerate(segments):
+            # Skip if segment has word-level timestamps (alignment worked)
+            if seg.has_word_timestamps():
+                result.append(seg)
+                continue
+
+            # Calculate minimum required duration based on text length
+            # Using a slightly slower reading speed for subtitle display
+            chars = len(seg.text)
+            min_required_duration = max(
+                self.min_duration,
+                chars / self.chars_per_second
+            )
+
+            current_duration = seg.end - seg.start
+
+            # Only extend if current duration is too short
+            if current_duration < min_required_duration:
+                new_end = seg.start + min_required_duration
+
+                # Don't exceed next segment's start time (with gap)
+                if i < len(segments) - 1:
+                    next_start = segments[i + 1].start
+                    max_end = next_start - self.min_gap
+                    new_end = min(new_end, max_end)
+
+                # Ensure we don't make it shorter than original
+                new_end = max(new_end, seg.end)
+
+                if new_end != seg.end:
+                    seg = SubtitleSegment(
+                        index=seg.index,
+                        start=seg.start,
+                        end=new_end,
+                        text=seg.text,
+                        words=seg.words,
+                        confidence=seg.confidence,
+                    )
+
+            result.append(seg)
+
+        return result
 
     def _log_summary(self) -> None:
         """Log processing summary."""

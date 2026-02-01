@@ -257,27 +257,57 @@ FOLLOWING DIALOGUE (for context, DO NOT translate):
         response: str,
         original_segments: List[SubtitleSegment],
     ) -> List[SubtitleSegment]:
-        """Parse translation response."""
+        """Parse translation response with multiple fallback patterns."""
         translated = []
 
-        # Extract translations by index
-        pattern = r"\[(\d+)\]\s*(.+?)(?=\[\d+\]|$)"
-        matches = re.findall(pattern, response, re.DOTALL)
-
+        # Try multiple patterns to extract translations
         index_to_translation = {}
+
+        # Pattern 1: [number] text (standard format)
+        pattern1 = r"\[(\d+)\]\s*(.+?)(?=\[\d+\]|$)"
+        matches = re.findall(pattern1, response, re.DOTALL)
         for idx_str, text in matches:
             idx = int(idx_str)
-            index_to_translation[idx] = text.strip()
+            text = text.strip()
+            if text and idx not in index_to_translation:
+                index_to_translation[idx] = text
+
+        # Pattern 2: number. text or number: text (alternative formats)
+        if len(index_to_translation) < len(original_segments):
+            pattern2 = r"(?:^|\n)\s*(\d+)[.:\)]\s*(.+?)(?=\n\s*\d+[.:\)]|$)"
+            matches = re.findall(pattern2, response, re.DOTALL)
+            for idx_str, text in matches:
+                idx = int(idx_str)
+                text = text.strip()
+                if text and idx not in index_to_translation:
+                    index_to_translation[idx] = text
+
+        # Pattern 3: Line-by-line matching (if same number of lines)
+        if len(index_to_translation) < len(original_segments):
+            lines = [line.strip() for line in response.strip().split('\n') if line.strip()]
+            # Remove any lines that look like headers or instructions
+            lines = [line for line in lines if not line.startswith(('#', '-', '*', '翻译', 'Translation'))]
+
+            if len(lines) == len(original_segments):
+                for i, (seg, line) in enumerate(zip(original_segments, lines)):
+                    if seg.index not in index_to_translation:
+                        # Remove any leading index markers
+                        cleaned = re.sub(r'^[\[\(]?\d+[\]\)]?[.:\s]*', '', line).strip()
+                        if cleaned:
+                            index_to_translation[seg.index] = cleaned
 
         # Build translated segments
         for seg in original_segments:
             if seg.index in index_to_translation:
+                trans_text = index_to_translation[seg.index]
+                # Clean up common issues
+                trans_text = self._clean_translation(trans_text, seg.text)
                 translated.append(
                     SubtitleSegment(
                         index=seg.index,
                         start=seg.start,
                         end=seg.end,
-                        text=index_to_translation[seg.index],
+                        text=trans_text,
                     )
                 )
             else:
@@ -285,6 +315,20 @@ FOLLOWING DIALOGUE (for context, DO NOT translate):
                 translated.append(seg)
 
         return translated
+
+    def _clean_translation(self, translated: str, original: str) -> str:
+        """Clean up translation text."""
+        # Remove trailing punctuation duplicates
+        translated = translated.strip()
+
+        # If translation is suspiciously short compared to original, might be an error
+        if len(translated) < 2 and len(original) > 10:
+            return original
+
+        # Remove any remaining index markers at the start
+        translated = re.sub(r'^[\[\(]?\d+[\]\)]?\s*', '', translated)
+
+        return translated.strip()
 
     def translate_batch(
         self,
@@ -329,6 +373,21 @@ FOLLOWING DIALOGUE (for context, DO NOT translate):
                     segments,
                 )
 
+                # Check for failed translations and retry individually
+                failed_segments = [
+                    (i, seg) for i, seg in enumerate(translated)
+                    if seg.text == segments[i].text  # Translation same as original
+                ]
+
+                # If more than half failed, retry individual segments
+                if len(failed_segments) > len(segments) // 2:
+                    logger.debug(
+                        f"Batch had {len(failed_segments)} failures, retrying individually"
+                    )
+                    translated = self._retry_failed_individually(
+                        translated, failed_segments, source_lang, target_lang
+                    )
+
                 return translated
 
             except ResponseError as e:
@@ -340,6 +399,52 @@ FOLLOWING DIALOGUE (for context, DO NOT translate):
                     raise TranslationError(f"Translation failed: {e}")
 
         return segments  # Fallback to original
+
+    def _retry_failed_individually(
+        self,
+        translated: List[SubtitleSegment],
+        failed: List[tuple],
+        source_lang: str,
+        target_lang: str,
+    ) -> List[SubtitleSegment]:
+        """Retry translating failed segments one by one."""
+        result = list(translated)
+        source_name = self.LANGUAGE_NAMES.get(source_lang, source_lang)
+        target_name = self.LANGUAGE_NAMES.get(target_lang, target_lang)
+
+        for idx, seg in failed:
+            try:
+                # Simple single-segment prompt
+                simple_prompt = (
+                    f"Translate this subtitle from {source_name} to {target_name}. "
+                    f"Output ONLY the translation, nothing else:\n\n{seg.text}"
+                )
+
+                response = self.client.chat(
+                    model=self.config.model,
+                    messages=[{"role": "user", "content": simple_prompt}],
+                    options={"temperature": self.config.temperature},
+                )
+
+                trans_text = response["message"]["content"].strip()
+
+                # Clean up response
+                trans_text = self._clean_translation(trans_text, seg.text)
+
+                if trans_text and trans_text != seg.text:
+                    result[idx] = SubtitleSegment(
+                        index=seg.index,
+                        start=seg.start,
+                        end=seg.end,
+                        text=trans_text,
+                    )
+                    logger.debug(f"Successfully retried segment {seg.index}")
+
+            except Exception as e:
+                logger.debug(f"Individual retry failed for segment {seg.index}: {e}")
+                # Keep original on failure
+
+        return result
 
     def translate(
         self,

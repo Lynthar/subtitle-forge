@@ -150,6 +150,7 @@ def batch_process(
         use_whisperx=config.whisper.use_whisperx,
         whisperx_align=config.whisper.whisperx_align,
         hf_token=config.whisper.hf_token,
+        hf_endpoint=config.whisper.hf_endpoint,
     )
 
     # Build timestamp config
