@@ -62,6 +62,7 @@ class SubtitleProgress:
                     self.progress = prog
                     self.task_id = task_id
                     self.current_step = 0
+                    self._paused = False
 
                 def update(self, description: str, advance: int = 1):
                     self.progress.update(
@@ -73,6 +74,18 @@ class SubtitleProgress:
 
                 def set_description(self, description: str):
                     self.progress.update(self.task_id, description=description)
+
+                def pause(self):
+                    """Pause the progress bar to allow nested progress bars."""
+                    if not self._paused:
+                        self.progress.stop()
+                        self._paused = True
+
+                def resume(self):
+                    """Resume the progress bar after nested operations."""
+                    if self._paused:
+                        self.progress.start()
+                        self._paused = False
 
             yield ProgressTracker(progress, task)
 

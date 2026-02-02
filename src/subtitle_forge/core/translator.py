@@ -117,7 +117,7 @@ Translated subtitles:"""
         self._client: Optional[Client] = None
         self._model_manager: Optional[OllamaModelManager] = None
         self._failed_translations: List[dict] = []  # Track failed translations
-        self._batch_failure_counts: dict = {}  # Track failure counts per batch for compressed logging
+        self._batch_failure_indices: dict = {}  # Track failed indices per reason for compressed logging
 
     @property
     def client(self) -> Client:
@@ -324,9 +324,10 @@ FOLLOWING DIALOGUE (for context, DO NOT translate):
                     seg, response, index_to_translation
                 )
 
-                # Track failure count by reason (for compressed batch logging)
-                self._batch_failure_counts[failure_reason] = \
-                    self._batch_failure_counts.get(failure_reason, 0) + 1
+                # Track failed indices by reason (for compressed batch logging)
+                if failure_reason not in self._batch_failure_indices:
+                    self._batch_failure_indices[failure_reason] = []
+                self._batch_failure_indices[failure_reason].append(seg.index)
 
                 # Track failed translation for later analysis/log file
                 self._failed_translations.append({
@@ -366,32 +367,32 @@ FOLLOWING DIALOGUE (for context, DO NOT translate):
         for pattern, reason_type in refusal_patterns:
             if pattern.lower() in response_lower:
                 if reason_type == "model_refusal":
-                    return f"模型拒绝翻译 (检测到: '{pattern}')"
+                    return "模型拒绝翻译"
                 else:
-                    return f"内容被过滤 (检测到: '{pattern}')"
+                    return "内容被过滤"
 
         # Check if response is empty or too short
         if not response.strip():
             return "LLM返回空响应"
 
         if len(response.strip()) < 10:
-            return f"LLM响应过短: '{response.strip()[:50]}'"
+            return "LLM响应过短"
 
         # Check if the segment index pattern is missing
         if f"[{segment.index}]" not in response and str(segment.index) not in response:
-            return f"响应中未找到段落索引 [{segment.index}]"
+            return "响应中未找到段落索引"
 
         # Check if original text might be problematic
         if len(original_text) < 3:
-            return f"原文过短: '{original_text}'"
+            return "原文过短"
 
         # Check for interjections that models often skip
         interjection_patterns = ["あぁ", "うん", "ああ", "えっ", "んん", "はぁ"]
         if any(p in original_text for p in interjection_patterns):
-            return f"可能是语气词被跳过: '{original_text[:20]}'"
+            return "可能是语气词被跳过"
 
         # Default - parsing issue
-        return f"解析失败 (已解析 {len(found_translations)} 个, 原文: '{original_text[:30]}...')"
+        return "解析失败"
 
     def _clean_translation(self, translated: str, original: str) -> str:
         """Clean up translation text."""
@@ -431,8 +432,8 @@ FOLLOWING DIALOGUE (for context, DO NOT translate):
         if not segments:
             return []
 
-        # Reset batch failure counts for this batch
-        self._batch_failure_counts = {}
+        # Reset batch failure indices for this batch
+        self._batch_failure_indices = {}
 
         prompt = self._build_translation_prompt(
             segments, source_lang, target_lang,
@@ -454,12 +455,16 @@ FOLLOWING DIALOGUE (for context, DO NOT translate):
                 )
 
                 # Log compressed summary of failures for this batch
-                if self._batch_failure_counts:
-                    summary = ", ".join(
-                        f"{reason}: {count}"
-                        for reason, count in self._batch_failure_counts.items()
-                    )
-                    logger.warning(f"Batch translation issues: {summary}")
+                if self._batch_failure_indices:
+                    summary_parts = []
+                    for reason, indices in self._batch_failure_indices.items():
+                        if len(indices) <= 5:
+                            idx_str = ", ".join(str(i) for i in indices)
+                        else:
+                            # Show first 3 and last 2 with ellipsis
+                            idx_str = f"{indices[0]}, {indices[1]}, {indices[2]}...{indices[-2]}, {indices[-1]}"
+                        summary_parts.append(f"{reason} [{idx_str}]")
+                    logger.warning(f"Batch translation issues: {'; '.join(summary_parts)}")
 
                 # Check for failed translations and retry individually
                 failed_segments = [

@@ -416,6 +416,9 @@ def process(
             # 3. Translate (models already prepared in Phase 1)
             tracker.set_description(f"[3/4] Translating: {video.name}")
 
+            # Pause main progress bar for translation (to avoid two progress bars)
+            tracker.pause()
+
             # Show explanation for first-time users
             print_translation_explainer()
 
@@ -450,6 +453,8 @@ def process(
 
                 print_info(f"Translated subtitles saved: {output_path}")
 
+            # Resume main progress bar
+            tracker.resume()
             tracker.update("[3/4] Translation complete")
 
             # 5. Cleanup
