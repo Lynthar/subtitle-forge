@@ -168,6 +168,11 @@ def process(
         "--timestamp-mode",
         help="Timestamp processing mode: off, minimal (default), full",
     ),
+    split_sentences: Optional[bool] = typer.Option(
+        None,
+        "--split-sentences/--no-split-sentences",
+        help="Split multi-sentence segments using word timestamps for better timing",
+    ),
     hf_mirror: Optional[str] = typer.Option(
         None,
         "--hf-mirror",
@@ -386,6 +391,7 @@ def process(
                 "chars_per_second": cfg.timestamp.chars_per_second,
                 "cjk_chars_per_second": cfg.timestamp.cjk_chars_per_second,
                 "split_threshold": cfg.timestamp.split_threshold,
+                "split_sentences": split_sentences if split_sentences is not None else cfg.timestamp.split_sentences,
             } if post_process and cfg.timestamp.enabled else None
 
             segments, info = transcriber.transcribe(
@@ -409,6 +415,9 @@ def process(
 
             # 3. Translate (models already prepared in Phase 1)
             tracker.set_description(f"[3/4] Translating: {video.name}")
+
+            # Pause main progress bar for translation (to avoid two progress bars)
+            tracker.pause()
 
             # Show explanation for first-time users
             print_translation_explainer()
@@ -444,6 +453,8 @@ def process(
 
                 print_info(f"Translated subtitles saved: {output_path}")
 
+            # Resume main progress bar
+            tracker.resume()
             tracker.update("[3/4] Translation complete")
 
             # 5. Cleanup

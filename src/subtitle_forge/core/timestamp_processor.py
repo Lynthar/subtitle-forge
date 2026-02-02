@@ -1,11 +1,11 @@
 """Timestamp post-processing module for improving subtitle timing accuracy."""
 
 from dataclasses import dataclass
-from typing import List, Optional
+from typing import List, Optional, Tuple
 import logging
 import re
 
-from ..models.subtitle import SubtitleSegment
+from ..models.subtitle import SubtitleSegment, WordTiming
 
 logger = logging.getLogger(__name__)
 
@@ -13,6 +13,8 @@ logger = logging.getLogger(__name__)
 SENTENCE_ENDINGS = re.compile(r'([。！？!?\.\n]+)')
 # Japanese/Chinese specific sentence endings
 CJK_SENTENCE_ENDINGS = re.compile(r'([。！？」』）]+)')
+# Pattern to detect sentence-ending punctuation (for word matching)
+SENTENCE_END_CHARS = set('。！？!?.')
 
 
 @dataclass
@@ -62,6 +64,7 @@ class TimestampProcessor:
         split_threshold: int = 30,
         split_long_segments: bool = True,
         extend_end_times: bool = True,
+        split_sentences: bool = False,
     ):
         """
         Initialize timestamp processor.
@@ -78,6 +81,7 @@ class TimestampProcessor:
             split_threshold: Minimum characters before attempting split.
             split_long_segments: Split segments containing multiple sentences (full mode only).
             extend_end_times: Extend end times based on text length (full mode only).
+            split_sentences: Split segments by sentences using word-level timestamps.
         """
         self.mode = mode
         self.language = language
@@ -90,6 +94,7 @@ class TimestampProcessor:
         self.split_threshold = split_threshold
         self.split_long_segments = split_long_segments
         self.extend_end_times = extend_end_times
+        self.split_sentences = split_sentences
         self._issues: List[TimestampIssue] = []
         self._gaps: List[GapInfo] = []
 
@@ -134,6 +139,15 @@ class TimestampProcessor:
 
         if not segments:
             return segments
+
+        # Sentence splitting runs independently of mode if enabled
+        if self.split_sentences:
+            original_count = len(segments)
+            segments = self._split_by_sentences(segments)
+            if len(segments) != original_count:
+                logger.info(
+                    f"Sentence splitting: {original_count} segments -> {len(segments)} segments"
+                )
 
         # Mode: off - trust WhisperX output completely
         if self.mode == "off":
@@ -614,6 +628,268 @@ class TimestampProcessor:
             result.append(seg)
 
         return result
+
+    def _split_by_sentences(
+        self, segments: List[SubtitleSegment]
+    ) -> List[SubtitleSegment]:
+        """
+        Split segments by sentence boundaries using word-level timestamps.
+
+        This method detects sentence-ending punctuation and uses word timestamps
+        to calculate precise timing for each sentence, then applies:
+        1. Chain-style end time correction (each sentence ends before next starts)
+        2. Minimum display time protection (based on reading speed)
+        3. Final sentence linger (uses original segment end time)
+        """
+        result = []
+
+        for seg in segments:
+            # If no word timestamps, use fallback proportional splitting
+            if not seg.has_word_timestamps():
+                split_segs = self._split_segment_proportionally(seg)
+                result.extend(split_segs)
+                continue
+
+            # Find sentence boundaries using word timestamps
+            sentences = self._extract_sentences_with_timing(seg)
+
+            if len(sentences) <= 1:
+                # No splitting needed
+                result.append(seg)
+                continue
+
+            # Apply timing corrections to sentences
+            corrected_sentences = self._apply_sentence_timing_corrections(
+                sentences, seg.end
+            )
+
+            # Create new segments for each sentence
+            for sentence_text, start_time, end_time in corrected_sentences:
+                if not sentence_text.strip():
+                    continue
+
+                result.append(
+                    SubtitleSegment(
+                        index=len(result) + 1,
+                        start=start_time,
+                        end=end_time,
+                        text=sentence_text.strip(),
+                    )
+                )
+
+        return result
+
+    def _apply_sentence_timing_corrections(
+        self,
+        sentences: List[Tuple[str, float, float]],
+        segment_end: float,
+    ) -> List[Tuple[str, float, float]]:
+        """
+        Apply timing corrections to split sentences.
+
+        Corrections applied:
+        1. Chain-style: each sentence's end = next sentence's start - min_gap
+        2. Minimum display time: ensure readable duration based on text length
+        3. Final sentence linger: last sentence extends to original segment end
+
+        Args:
+            sentences: List of (text, start, end) tuples from word timestamps.
+            segment_end: Original segment's end time (for final sentence).
+
+        Returns:
+            Corrected list of (text, start, end) tuples.
+        """
+        if not sentences:
+            return sentences
+
+        n = len(sentences)
+        corrected = []
+
+        for i, (text, start, original_end) in enumerate(sentences):
+            is_last = (i == n - 1)
+
+            # Calculate minimum readable duration based on text length
+            char_count = len(text)
+            min_readable_duration = max(
+                self.min_duration,
+                char_count / self._effective_cps
+            )
+
+            if is_last:
+                # Last sentence: extend to original segment end for lingering effect
+                end = segment_end
+            else:
+                # Chain-style: end just before next sentence starts
+                next_start = sentences[i + 1][1]
+                end = next_start - self.min_gap
+
+            # Ensure minimum readable duration
+            actual_duration = end - start
+            if actual_duration < min_readable_duration:
+                # Try to extend end time
+                desired_end = start + min_readable_duration
+
+                if is_last:
+                    # For last sentence, can extend freely (within reason)
+                    # Allow up to 2 seconds beyond segment end for lingering
+                    max_linger = segment_end + 2.0
+                    end = min(desired_end, max_linger)
+                else:
+                    # For non-last sentences, don't overlap with next sentence
+                    next_start = sentences[i + 1][1]
+                    end = min(desired_end, next_start - self.min_gap)
+
+            # Final safety: ensure we have at least min_duration
+            if end - start < self.min_duration:
+                end = start + self.min_duration
+
+            corrected.append((text, start, end))
+
+        return corrected
+
+    def _extract_sentences_with_timing(
+        self, seg: SubtitleSegment
+    ) -> List[Tuple[str, float, float]]:
+        """
+        Extract sentences from segment with their timing using word timestamps.
+
+        Splits on:
+        1. Sentence-ending punctuation (。！？!?.)
+        2. Large gaps between words (>= 0.5s) indicating natural pauses
+
+        Returns:
+            List of (sentence_text, start_time, end_time) tuples.
+        """
+        if not seg.words:
+            return [(seg.text, seg.start, seg.end)]
+
+        # Threshold for considering a gap as sentence boundary (seconds)
+        gap_threshold = 0.5
+
+        sentences = []
+        current_sentence_words: List[WordTiming] = []
+        current_text_parts: List[str] = []
+        prev_word_end: Optional[float] = None
+
+        for word in seg.words:
+            word_text = word.word.strip()
+            if not word_text:
+                continue
+
+            # Check for large gap before this word (indicates sentence boundary)
+            if prev_word_end is not None and current_sentence_words:
+                gap = word.start - prev_word_end
+                if gap >= gap_threshold:
+                    # Save current sentence before starting new one
+                    sentence_text = self._join_words(current_text_parts)
+                    start_time = current_sentence_words[0].start
+                    end_time = current_sentence_words[-1].end
+                    sentences.append((sentence_text, start_time, end_time))
+                    current_sentence_words = []
+                    current_text_parts = []
+
+            current_sentence_words.append(word)
+            current_text_parts.append(word_text)
+            prev_word_end = word.end
+
+            # Check if this word ends with sentence-ending punctuation
+            if self._is_sentence_end(word_text):
+                if current_sentence_words:
+                    sentence_text = self._join_words(current_text_parts)
+                    start_time = current_sentence_words[0].start
+                    end_time = current_sentence_words[-1].end
+                    sentences.append((sentence_text, start_time, end_time))
+
+                current_sentence_words = []
+                current_text_parts = []
+                prev_word_end = None  # Reset after punctuation split
+
+        # Handle remaining words (sentence without ending punctuation)
+        if current_sentence_words:
+            sentence_text = self._join_words(current_text_parts)
+            start_time = current_sentence_words[0].start
+            end_time = current_sentence_words[-1].end
+            sentences.append((sentence_text, start_time, end_time))
+
+        return sentences if sentences else [(seg.text, seg.start, seg.end)]
+
+    def _is_sentence_end(self, word: str) -> bool:
+        """Check if a word ends with sentence-ending punctuation."""
+        if not word:
+            return False
+        # Check the last character (or last few for multi-char endings)
+        for char in reversed(word):
+            if char in SENTENCE_END_CHARS:
+                return True
+            if not char.isspace():
+                break
+        return False
+
+    def _join_words(self, words: List[str]) -> str:
+        """
+        Join words into text, handling CJK vs Western spacing.
+        """
+        if not words:
+            return ""
+
+        # Check if primarily CJK
+        is_cjk = self._is_cjk_language(self.language)
+
+        if is_cjk:
+            # CJK: no space between characters
+            return "".join(words)
+        else:
+            # Western: space between words
+            return " ".join(words)
+
+    def _split_segment_proportionally(
+        self, seg: SubtitleSegment
+    ) -> List[SubtitleSegment]:
+        """
+        Fallback: split segment proportionally when no word timestamps available.
+        """
+        # Try to split by sentence endings
+        sentences = self._split_into_sentences(seg.text)
+
+        if len(sentences) <= 1:
+            return [seg]
+
+        # Distribute time proportionally across sentences
+        total_chars = sum(len(s) for s in sentences)
+        total_duration = seg.end - seg.start
+        current_time = seg.start
+        result = []
+
+        for i, sentence in enumerate(sentences):
+            if not sentence.strip():
+                continue
+
+            # Calculate duration based on character ratio
+            char_ratio = len(sentence) / total_chars if total_chars > 0 else 1.0 / len(sentences)
+            duration = total_duration * char_ratio
+
+            # Ensure minimum duration
+            duration = max(duration, self.min_duration)
+
+            # Calculate end time
+            end_time = current_time + duration
+
+            # Don't exceed original segment end for last sentence
+            if i == len(sentences) - 1:
+                end_time = seg.end
+
+            result.append(
+                SubtitleSegment(
+                    index=len(result) + 1,
+                    start=current_time,
+                    end=end_time,
+                    text=sentence.strip(),
+                )
+            )
+
+            current_time = end_time
+
+        return result if result else [seg]
 
     def _log_summary(self) -> None:
         """Log processing summary."""
