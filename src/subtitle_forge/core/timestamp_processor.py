@@ -681,23 +681,44 @@ class TimestampProcessor:
         """
         Extract sentences from segment with their timing using word timestamps.
 
+        Splits on:
+        1. Sentence-ending punctuation (。！？!?.)
+        2. Large gaps between words (>= 0.5s) indicating natural pauses
+
         Returns:
             List of (sentence_text, start_time, end_time) tuples.
         """
         if not seg.words:
             return [(seg.text, seg.start, seg.end)]
 
+        # Threshold for considering a gap as sentence boundary (seconds)
+        gap_threshold = 0.5
+
         sentences = []
         current_sentence_words: List[WordTiming] = []
         current_text_parts: List[str] = []
+        prev_word_end: Optional[float] = None
 
         for word in seg.words:
             word_text = word.word.strip()
             if not word_text:
                 continue
 
+            # Check for large gap before this word (indicates sentence boundary)
+            if prev_word_end is not None and current_sentence_words:
+                gap = word.start - prev_word_end
+                if gap >= gap_threshold:
+                    # Save current sentence before starting new one
+                    sentence_text = self._join_words(current_text_parts)
+                    start_time = current_sentence_words[0].start
+                    end_time = current_sentence_words[-1].end
+                    sentences.append((sentence_text, start_time, end_time))
+                    current_sentence_words = []
+                    current_text_parts = []
+
             current_sentence_words.append(word)
             current_text_parts.append(word_text)
+            prev_word_end = word.end
 
             # Check if this word ends with sentence-ending punctuation
             if self._is_sentence_end(word_text):
@@ -709,6 +730,7 @@ class TimestampProcessor:
 
                 current_sentence_words = []
                 current_text_parts = []
+                prev_word_end = None  # Reset after punctuation split
 
         # Handle remaining words (sentence without ending punctuation)
         if current_sentence_words:

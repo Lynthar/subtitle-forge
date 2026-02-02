@@ -837,7 +837,7 @@ timestamp:
   min_gap: 0.05                # 最小间隙（秒）
   chars_per_second: 15.0       # 西文阅读速度
   cjk_chars_per_second: 10.0   # 中日韩阅读速度
-  split_sentences: false       # 句子级分割
+  split_sentences: true        # 句子级分割（默认启用）
 ```
 
 ### CJK 语言优化

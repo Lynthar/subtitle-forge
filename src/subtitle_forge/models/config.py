@@ -20,7 +20,7 @@ class TimestampConfig:
     chars_per_second: float = 15.0  # Reading speed for Western languages
     cjk_chars_per_second: float = 10.0  # Reading speed for CJK languages
     split_threshold: int = 30  # Minimum characters before attempting split
-    split_sentences: bool = False  # Split segments by sentence using word timestamps
+    split_sentences: bool = True  # Split segments by sentence using word timestamps
 
 
 @dataclass
