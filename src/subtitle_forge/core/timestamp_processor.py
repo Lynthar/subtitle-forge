@@ -636,7 +636,10 @@ class TimestampProcessor:
         Split segments by sentence boundaries using word-level timestamps.
 
         This method detects sentence-ending punctuation and uses word timestamps
-        to calculate precise timing for each sentence.
+        to calculate precise timing for each sentence, then applies:
+        1. Chain-style end time correction (each sentence ends before next starts)
+        2. Minimum display time protection (based on reading speed)
+        3. Final sentence linger (uses original segment end time)
         """
         result = []
 
@@ -655,14 +658,15 @@ class TimestampProcessor:
                 result.append(seg)
                 continue
 
+            # Apply timing corrections to sentences
+            corrected_sentences = self._apply_sentence_timing_corrections(
+                sentences, seg.end
+            )
+
             # Create new segments for each sentence
-            for sentence_text, start_time, end_time in sentences:
+            for sentence_text, start_time, end_time in corrected_sentences:
                 if not sentence_text.strip():
                     continue
-
-                # Ensure minimum duration
-                if end_time - start_time < self.min_duration:
-                    end_time = start_time + self.min_duration
 
                 result.append(
                     SubtitleSegment(
@@ -674,6 +678,74 @@ class TimestampProcessor:
                 )
 
         return result
+
+    def _apply_sentence_timing_corrections(
+        self,
+        sentences: List[Tuple[str, float, float]],
+        segment_end: float,
+    ) -> List[Tuple[str, float, float]]:
+        """
+        Apply timing corrections to split sentences.
+
+        Corrections applied:
+        1. Chain-style: each sentence's end = next sentence's start - min_gap
+        2. Minimum display time: ensure readable duration based on text length
+        3. Final sentence linger: last sentence extends to original segment end
+
+        Args:
+            sentences: List of (text, start, end) tuples from word timestamps.
+            segment_end: Original segment's end time (for final sentence).
+
+        Returns:
+            Corrected list of (text, start, end) tuples.
+        """
+        if not sentences:
+            return sentences
+
+        n = len(sentences)
+        corrected = []
+
+        for i, (text, start, original_end) in enumerate(sentences):
+            is_last = (i == n - 1)
+
+            # Calculate minimum readable duration based on text length
+            char_count = len(text)
+            min_readable_duration = max(
+                self.min_duration,
+                char_count / self._effective_cps
+            )
+
+            if is_last:
+                # Last sentence: extend to original segment end for lingering effect
+                end = segment_end
+            else:
+                # Chain-style: end just before next sentence starts
+                next_start = sentences[i + 1][1]
+                end = next_start - self.min_gap
+
+            # Ensure minimum readable duration
+            actual_duration = end - start
+            if actual_duration < min_readable_duration:
+                # Try to extend end time
+                desired_end = start + min_readable_duration
+
+                if is_last:
+                    # For last sentence, can extend freely (within reason)
+                    # Allow up to 2 seconds beyond segment end for lingering
+                    max_linger = segment_end + 2.0
+                    end = min(desired_end, max_linger)
+                else:
+                    # For non-last sentences, don't overlap with next sentence
+                    next_start = sentences[i + 1][1]
+                    end = min(desired_end, next_start - self.min_gap)
+
+            # Final safety: ensure we have at least min_duration
+            if end - start < self.min_duration:
+                end = start + self.min_duration
+
+            corrected.append((text, start, end))
+
+        return corrected
 
     def _extract_sentences_with_timing(
         self, seg: SubtitleSegment
