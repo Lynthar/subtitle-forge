@@ -95,3 +95,8 @@ timestamp:
 
   # Minimum text length before attempting to split segments (full mode only)
   split_threshold: 30
+
+  # Split segments by sentence boundaries using word-level timestamps
+  # This helps when WhisperX groups multiple sentences into one segment
+  # Recommended for dialogue-heavy videos (movies, TV shows, interviews)
+  split_sentences: false

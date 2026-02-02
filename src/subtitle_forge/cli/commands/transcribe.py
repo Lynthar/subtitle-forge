@@ -61,6 +61,11 @@ def transcribe_video(
         "--timestamp-mode",
         help="Timestamp processing mode: off, minimal (default), full",
     ),
+    split_sentences: Optional[bool] = typer.Option(
+        None,
+        "--split-sentences/--no-split-sentences",
+        help="Split multi-sentence segments using word timestamps for better timing",
+    ),
     save_debug_log: bool = typer.Option(
         False,
         "--save-debug-log",
@@ -188,6 +193,7 @@ def transcribe_video(
                 "chars_per_second": config.timestamp.chars_per_second,
                 "cjk_chars_per_second": config.timestamp.cjk_chars_per_second,
                 "split_threshold": config.timestamp.split_threshold,
+                "split_sentences": split_sentences if split_sentences is not None else config.timestamp.split_sentences,
             } if post_process and config.timestamp.enabled else None
 
             segments, info = transcriber.transcribe(

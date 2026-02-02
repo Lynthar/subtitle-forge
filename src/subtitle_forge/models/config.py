@@ -20,6 +20,7 @@ class TimestampConfig:
     chars_per_second: float = 15.0  # Reading speed for Western languages
     cjk_chars_per_second: float = 10.0  # Reading speed for CJK languages
     split_threshold: int = 30  # Minimum characters before attempting split
+    split_sentences: bool = False  # Split segments by sentence using word timestamps
 
 
 @dataclass
@@ -159,6 +160,7 @@ class AppConfig:
                 "chars_per_second": self.timestamp.chars_per_second,
                 "cjk_chars_per_second": self.timestamp.cjk_chars_per_second,
                 "split_threshold": self.timestamp.split_threshold,
+                "split_sentences": self.timestamp.split_sentences,
             },
             "max_workers": self.max_workers,
             "log_level": self.log_level,
@@ -211,6 +213,7 @@ class AppConfig:
                 "chars_per_second": self.timestamp.chars_per_second,
                 "cjk_chars_per_second": self.timestamp.cjk_chars_per_second,
                 "split_threshold": self.timestamp.split_threshold,
+                "split_sentences": self.timestamp.split_sentences,
             },
             "max_workers": self.max_workers,
             "log_level": self.log_level,

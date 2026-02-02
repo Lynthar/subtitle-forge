@@ -729,6 +729,7 @@ class Transcriber:
             chars_per_second=config.get("chars_per_second", 15.0),
             cjk_chars_per_second=config.get("cjk_chars_per_second", 10.0),
             split_threshold=config.get("split_threshold", 30),
+            split_sentences=config.get("split_sentences", False),
         )
 
         return processor.process(segments, audio_duration)
