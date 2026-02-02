@@ -446,6 +446,7 @@ subtitle-forge process <video> -t <target_lang> [options]
 | `--whisperx / --no-whisperx` | - | 使用/不使用 WhisperX |
 | `--post-process / --no-post-process` | - | 启用/禁用时间戳后处理 |
 | `--timestamp-mode` | - | 后处理模式：off, minimal, full |
+| `--split-sentences / --no-split-sentences` | - | 按句子拆分多句字幕 |
 | `--vad-mode` | - | VAD 预设：default, aggressive, relaxed, precise |
 | `--speech-pad` | - | 语音填充时间（毫秒） |
 | `--min-silence` | - | 最小静音时长（毫秒） |
@@ -520,6 +521,7 @@ subtitle-forge transcribe <video> [options]
 | `--auto-model` | - | 根据 GPU 自动选择模型 |
 | `--whisperx / --no-whisperx` | - | 使用/不使用 WhisperX |
 | `--timestamp-mode` | - | 后处理模式 |
+| `--split-sentences / --no-split-sentences` | - | 按句子拆分多句字幕 |
 | `--save-debug-log` | - | 保存调试日志 |
 
 **示例**：
@@ -801,6 +803,29 @@ subtitle-forge process video.mp4 -t zh --timestamp-mode full
 subtitle-forge process video.mp4 -t zh --no-post-process
 ```
 
+### 句子级分割
+
+当视频中多句对话被合并到一个字幕段时，可以使用 `--split-sentences` 选项按句子拆分：
+
+```bash
+# 启用句子分割（推荐用于电影、电视剧、访谈等对话密集的视频）
+subtitle-forge process video.mp4 -t zh --split-sentences
+
+# 也可在 transcribe 命令中使用
+subtitle-forge transcribe video.mp4 --split-sentences
+```
+
+**工作原理**：
+- 利用 WhisperX 提供的词级时间戳
+- 在句末标点（。！？等）处拆分
+- 根据词时间戳精确计算每个句子的开始和结束时间
+- 独立于 `--timestamp-mode` 选项，可与任何模式组合使用
+
+**适用场景**：
+- 对话密集的电影、电视剧
+- 访谈节目
+- 需要逐句显示字幕的场景
+
 ### 配置选项
 
 ```yaml
@@ -812,6 +837,7 @@ timestamp:
   min_gap: 0.05                # 最小间隙（秒）
   chars_per_second: 15.0       # 西文阅读速度
   cjk_chars_per_second: 10.0   # 中日韩阅读速度
+  split_sentences: false       # 句子级分割
 ```
 
 ### CJK 语言优化
