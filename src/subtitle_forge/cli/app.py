@@ -6,7 +6,7 @@ from typing import Optional, List
 import typer
 from rich.console import Console
 
-from .commands import transcribe, translate, batch, config
+from .commands import transcribe, translate, batch, config, serve
 from ..models.config import AppConfig
 from ..utils.logger import setup_logging
 
@@ -24,6 +24,7 @@ app.add_typer(transcribe.app, name="transcribe", help="Transcribe video to subti
 app.add_typer(translate.app, name="translate", help="Translate existing subtitles")
 app.add_typer(batch.app, name="batch", help="Batch process multiple videos")
 app.add_typer(config.app, name="config", help="Configuration management")
+app.add_typer(serve.app, name="serve", help="Run as an HTTP server (job-based REST API)")
 
 # Global config
 _config: Optional[AppConfig] = None
