@@ -2,6 +2,7 @@
 
 from typing import List, Optional, Callable
 from dataclasses import dataclass
+import json
 import re
 import logging
 
@@ -21,9 +22,12 @@ class TranslationConfig:
 
     model: str = "qwen2.5:14b"
     host: str = "http://localhost:11434"
-    temperature: float = 0.3
+    # Translation is deterministic — temperature=0 sharply reduces dropped
+    # / renumbered segments. Raise only for explicit creative paraphrasing.
+    temperature: float = 0.0
     max_batch_size: int = 10
     max_retries: int = 3
+    request_timeout: float = 180.0  # Per-request timeout (seconds)
     prompt_template: Optional[str] = None  # Custom prompt template (None = use default)
     prompt_template_id: Optional[str] = None  # Reference to prompt library template
     save_failed_log: bool = False  # Save failed translations to a log file
@@ -33,9 +37,31 @@ class TranslationConfig:
 class SubtitleTranslator:
     """Subtitle translator using Ollama LLM."""
 
-    # Default translation prompt template
-    # Available placeholders: {source_lang}, {target_lang}, {context_before}, {segments}, {context_after}
-    DEFAULT_PROMPT_TEMPLATE = """You are an expert subtitle translator for movies and TV dramas.
+    # Default JSON prompt template. Used when the user has NOT picked a
+    # library template — drives Ollama's `format="json"` mode for reliable
+    # parsing. The legacy [N]-line text format is still used when a custom
+    # or library template is selected (see _is_json_mode / _parse_response).
+    DEFAULT_PROMPT_TEMPLATE = """You are a professional subtitle translator. Translate dialogue from {source_lang} into {target_lang}.
+
+GUIDELINES
+- Preserve natural conversational tone, emotional nuance, and register.
+- Keep translations concise for subtitle readability.
+- For very short utterances (interjections, "uh", "嗯", "ah"), still translate them — do NOT drop them.
+- Treat the context blocks as background only; never include them in your output.
+{context_before}
+SUBTITLES TO TRANSLATE — every key in the JSON below MUST appear in your output:
+{segments}
+{context_after}
+OUTPUT — return STRICTLY a JSON object of the form:
+{{"translations": {{"<index>": "<translated text>", ...}}}}
+
+Do not include any text outside the JSON object. Do not omit any indices. Do not renumber.
+"""
+
+    # Legacy [N]-line prompt — kept for prompt_library templates that still
+    # rely on the original format. Available placeholders are the same set:
+    # {source_lang}, {target_lang}, {context_before}, {segments}, {context_after}
+    LEGACY_PROMPT_TEMPLATE = """You are an expert subtitle translator for movies and TV dramas.
 
 TRANSLATION GUIDELINES:
 1. Preserve natural dialogue flow and conversational tone
@@ -122,8 +148,49 @@ Translated subtitles:"""
     @property
     def client(self) -> Client:
         if self._client is None:
-            self._client = Client(host=self.config.host)
+            # httpx is a transitive dependency of ollama-python, so it's
+            # always installed when ollama is — but defer the import so the
+            # module can still load in environments that haven't pip
+            # installed dependencies yet (e.g. during static checks).
+            try:
+                import httpx
+                timeout = httpx.Timeout(self.config.request_timeout, connect=10.0)
+            except ImportError:
+                timeout = self.config.request_timeout
+            self._client = Client(host=self.config.host, timeout=timeout)
         return self._client
+
+    def _is_json_mode(self) -> bool:
+        """
+        Whether to drive the LLM in JSON mode + parse JSON output.
+
+        We only enable JSON mode for the default prompt — library / custom
+        templates were authored against the legacy [N]-line format and would
+        misbehave under format="json".
+        """
+        return (
+            self.config.prompt_template is None
+            and self.config.prompt_template_id is None
+        )
+
+    def _effective_batch_size(self) -> int:
+        """
+        Cap batch size based on model capability.
+
+        Larger batches degrade translation reliability for smaller models
+        (the LLM "forgets" segments mid-batch). Hard cap below the user's
+        configured size for 7B / 14B class models. 32B+ uses the user value.
+        """
+        cfg_max = max(1, self.config.max_batch_size)
+        model = self.config.model.lower()
+        # 32B / 70B / 72B and similarly large — trust user config.
+        if any(tag in model for tag in (":32b", ":34b", ":70b", ":72b", ":110b")):
+            return cfg_max
+        # 14B class — clamp to 6.
+        if ":14b" in model or ":13b" in model:
+            return min(cfg_max, 6)
+        # Anything 8B and below — clamp to 4.
+        return min(cfg_max, 4)
 
     @property
     def model_manager(self) -> OllamaModelManager:
@@ -213,39 +280,55 @@ Translated subtitles:"""
         """
         Build translation prompt with context for natural translation.
 
-        Args:
-            segments: Segments to translate.
-            source_lang: Source language code.
-            target_lang: Target language code.
-            context_before: Previous segments for context (not translated).
-            context_after: Following segments for context (not translated).
-
-        Returns:
-            Formatted prompt string.
+        In JSON mode (default), context is rendered as prose so the LLM cannot
+        confuse it with the indexed segments-to-translate. In legacy mode the
+        original [N] format is preserved for backward compatibility with
+        prompt-library templates.
         """
         source_name = self.LANGUAGE_NAMES.get(source_lang, source_lang)
         target_name = self.LANGUAGE_NAMES.get(target_lang, target_lang)
+        json_mode = self._is_json_mode()
 
-        # Format context sections
-        context_before_text = ""
-        if context_before:
-            context_lines = [f"  [{seg.index}] {seg.text}" for seg in context_before[-3:]]
-            context_before_text = f"""
+        if json_mode:
+            # Prose context — visually distinct from the JSON-shaped segments
+            # block, so the LLM can't accidentally include context indices in
+            # its output.
+            context_before_text = ""
+            if context_before:
+                snippet = " ".join(seg.text.strip() for seg in context_before[-3:])
+                context_before_text = (
+                    f'\nEARLIER DIALOGUE (background only, do NOT include in output): "{snippet}"\n'
+                )
+
+            context_after_text = ""
+            if context_after:
+                snippet = " ".join(seg.text.strip() for seg in context_after[:2])
+                context_after_text = (
+                    f'\nLATER DIALOGUE (background only, do NOT include in output): "{snippet}"\n'
+                )
+
+            # Segments rendered as a JSON object — primes the model to
+            # respond with a JSON object of the same shape.
+            seg_obj = {str(seg.index): seg.text for seg in segments}
+            segments_text = json.dumps(seg_obj, ensure_ascii=False, indent=2)
+        else:
+            context_before_text = ""
+            if context_before:
+                context_lines = [f"  [{seg.index}] {seg.text}" for seg in context_before[-3:]]
+                context_before_text = f"""
 PREVIOUS DIALOGUE (for context, DO NOT translate):
 {chr(10).join(context_lines)}"""
 
-        context_after_text = ""
-        if context_after:
-            context_lines = [f"  [{seg.index}] {seg.text}" for seg in context_after[:2]]
-            context_after_text = f"""
+            context_after_text = ""
+            if context_after:
+                context_lines = [f"  [{seg.index}] {seg.text}" for seg in context_after[:2]]
+                context_after_text = f"""
 FOLLOWING DIALOGUE (for context, DO NOT translate):
 {chr(10).join(context_lines)}"""
 
-        # Format segments
-        lines = [f"[{seg.index}] {seg.text}" for seg in segments]
-        segments_text = chr(10).join(lines)
+            lines = [f"[{seg.index}] {seg.text}" for seg in segments]
+            segments_text = chr(10).join(lines)
 
-        # Use custom template or default
         template = self.get_prompt_template()
 
         return template.format(
@@ -261,28 +344,58 @@ FOLLOWING DIALOGUE (for context, DO NOT translate):
         response: str,
         original_segments: List[SubtitleSegment],
     ) -> List[SubtitleSegment]:
-        """Parse translation response with multiple fallback patterns."""
+        """Parse translation response. Tries JSON first, falls back to regex."""
         translated = []
 
         # Log raw response for debugging (truncated)
         response_preview = response[:500] + "..." if len(response) > 500 else response
         logger.debug(f"Raw LLM response:\n{response_preview}")
 
-        # Try multiple patterns to extract translations
-        index_to_translation = {}
+        index_to_translation: dict = {}
 
-        # Pattern 1: [number] text (standard format)
-        pattern1 = r"\[(\d+)\]\s*(.+?)(?=\[\d+\]|$)"
-        matches = re.findall(pattern1, response, re.DOTALL)
-        for idx_str, text in matches:
-            idx = int(idx_str)
-            text = text.strip()
-            if text and idx not in index_to_translation:
-                index_to_translation[idx] = text
+        # Strategy 1: JSON parsing (the new default path).
+        # The LLM may wrap the JSON in markdown fences or add a stray prefix
+        # despite format="json"; pull out the first {...} block and parse it.
+        if not index_to_translation:
+            json_blob = self._extract_json_object(response)
+            if json_blob is not None:
+                try:
+                    parsed = json.loads(json_blob)
+                    translations = parsed.get("translations") if isinstance(parsed, dict) else None
+                    if isinstance(translations, dict):
+                        for key, value in translations.items():
+                            try:
+                                idx = int(key)
+                            except (TypeError, ValueError):
+                                continue
+                            if isinstance(value, str) and value.strip():
+                                index_to_translation[idx] = value.strip()
+                    elif isinstance(parsed, dict):
+                        # Some models return {"5": "...", "6": "..."} directly
+                        for key, value in parsed.items():
+                            try:
+                                idx = int(key)
+                            except (TypeError, ValueError):
+                                continue
+                            if isinstance(value, str) and value.strip():
+                                index_to_translation[idx] = value.strip()
+                except json.JSONDecodeError as e:
+                    logger.debug(f"JSON parse failed, falling back to regex: {e}")
 
-        # Pattern 2: number. text or number: text (alternative formats)
+        # Strategy 2: [N] prefixed lines (legacy format, also catches stray
+        # markdown like **[1]** text)
         if len(index_to_translation) < len(original_segments):
-            pattern2 = r"(?:^|\n)\s*(\d+)[.:\)]\s*(.+?)(?=\n\s*\d+[.:\)]|$)"
+            pattern1 = r"\[(\d+)\]\s*[:：]?\s*(.+?)(?=\[\d+\]|$)"
+            matches = re.findall(pattern1, response, re.DOTALL)
+            for idx_str, text in matches:
+                idx = int(idx_str)
+                text = text.strip()
+                if text and idx not in index_to_translation:
+                    index_to_translation[idx] = text
+
+        # Strategy 3: bare numbered lines — "1.", "1:", "1)", "(1)"
+        if len(index_to_translation) < len(original_segments):
+            pattern2 = r"(?:^|\n)\s*[\(\[]?(\d+)[\]\)]?\s*[.:：\)]\s*(.+?)(?=\n\s*[\(\[]?\d+[\]\)]?\s*[.:：\)]|$)"
             matches = re.findall(pattern2, response, re.DOTALL)
             for idx_str, text in matches:
                 idx = int(idx_str)
@@ -290,17 +403,15 @@ FOLLOWING DIALOGUE (for context, DO NOT translate):
                 if text and idx not in index_to_translation:
                     index_to_translation[idx] = text
 
-        # Pattern 3: Line-by-line matching (if same number of lines)
+        # Strategy 4: positional fallback — same number of non-empty lines
         if len(index_to_translation) < len(original_segments):
             lines = [line.strip() for line in response.strip().split('\n') if line.strip()]
-            # Remove any lines that look like headers or instructions
             lines = [line for line in lines if not line.startswith(('#', '-', '*', '翻译', 'Translation'))]
 
             if len(lines) == len(original_segments):
                 for i, (seg, line) in enumerate(zip(original_segments, lines)):
                     if seg.index not in index_to_translation:
-                        # Remove any leading index markers
-                        cleaned = re.sub(r'^[\[\(]?\d+[\]\)]?[.:\s]*', '', line).strip()
+                        cleaned = re.sub(r'^[\[\(]?\d+[\]\)]?[.:：\s]*', '', line).strip()
                         if cleaned:
                             index_to_translation[seg.index] = cleaned
 
@@ -408,6 +519,58 @@ FOLLOWING DIALOGUE (for context, DO NOT translate):
 
         return translated.strip()
 
+    @staticmethod
+    def _extract_json_object(response: str) -> Optional[str]:
+        """
+        Extract the first balanced JSON object from a response string.
+
+        Handles markdown fences (```json ... ```) and stray prefixes like
+        "Here is the translation:" that some models emit despite format="json".
+        Returns None if no balanced object is found.
+        """
+        if not response:
+            return None
+
+        # Strip markdown code fences if present
+        text = response.strip()
+        if text.startswith("```"):
+            # Drop the opening fence (and optional language tag)
+            first_newline = text.find("\n")
+            if first_newline != -1:
+                text = text[first_newline + 1:]
+            # Drop trailing fence
+            if text.rstrip().endswith("```"):
+                text = text.rstrip()[:-3]
+
+        # Walk the string finding a balanced { ... } block, respecting strings
+        start = text.find("{")
+        if start == -1:
+            return None
+
+        depth = 0
+        in_string = False
+        escape = False
+        for i in range(start, len(text)):
+            ch = text[i]
+            if escape:
+                escape = False
+                continue
+            if ch == "\\":
+                escape = True
+                continue
+            if ch == '"':
+                in_string = not in_string
+                continue
+            if in_string:
+                continue
+            if ch == "{":
+                depth += 1
+            elif ch == "}":
+                depth -= 1
+                if depth == 0:
+                    return text[start:i + 1]
+        return None
+
     def translate_batch(
         self,
         segments: List[SubtitleSegment],
@@ -441,13 +604,20 @@ FOLLOWING DIALOGUE (for context, DO NOT translate):
             context_after=context_after,
         )
 
+        json_mode = self._is_json_mode()
+        chat_kwargs = {
+            "model": self.config.model,
+            "messages": [{"role": "user", "content": prompt}],
+            "options": {"temperature": self.config.temperature},
+        }
+        if json_mode:
+            # Ollama's structured-output mode — guarantees parseable JSON
+            # whenever the model honours the constraint.
+            chat_kwargs["format"] = "json"
+
         for attempt in range(self.config.max_retries):
             try:
-                response = self.client.chat(
-                    model=self.config.model,
-                    messages=[{"role": "user", "content": prompt}],
-                    options={"temperature": self.config.temperature},
-                )
+                response = self.client.chat(**chat_kwargs)
 
                 translated = self._parse_translation_response(
                     response["message"]["content"],
@@ -466,16 +636,23 @@ FOLLOWING DIALOGUE (for context, DO NOT translate):
                         summary_parts.append(f"{reason} [{idx_str}]")
                     logger.warning(f"Batch translation issues: {'; '.join(summary_parts)}")
 
-                # Check for failed translations and retry individually
+                # Check for failed translations and retry individually.
+                # Detection: translated text is identical to the original AND
+                # the source/target are not the same language (which would
+                # make identical text a legitimate outcome).
                 failed_segments = [
                     (i, seg) for i, seg in enumerate(translated)
-                    if seg.text == segments[i].text  # Translation same as original
+                    if seg.text == segments[i].text
+                    and source_lang != target_lang
                 ]
 
-                # If more than half failed, retry individual segments
-                if len(failed_segments) > len(segments) // 2:
+                # Retry ANY failures individually — the prior "only if >50%
+                # failed" threshold left small batches with 1–2 untranslated
+                # segments unfixed, which is the most common failure mode in
+                # practice.
+                if failed_segments:
                     logger.debug(
-                        f"Batch had {len(failed_segments)} failures, retrying individually"
+                        f"Batch had {len(failed_segments)} failure(s), retrying individually"
                     )
                     translated = self._retry_failed_individually(
                         translated, failed_segments, source_lang, target_lang
@@ -490,6 +667,19 @@ FOLLOWING DIALOGUE (for context, DO NOT translate):
                 )
                 if attempt == self.config.max_retries - 1:
                     raise TranslationError(f"Translation failed: {e}")
+            except Exception as e:
+                # Catches httpx.TimeoutException + transport errors without
+                # a hard import-time dep on httpx. ResponseError is handled
+                # above for retry-on-server-error semantics.
+                err_name = type(e).__name__
+                if "Timeout" not in err_name and "Connect" not in err_name:
+                    raise
+                logger.warning(
+                    f"Translation request failed ({err_name}) "
+                    f"(attempt {attempt + 1}/{self.config.max_retries}): {e}"
+                )
+                if attempt == self.config.max_retries - 1:
+                    raise TranslationError(f"Translation failed after {self.config.max_retries} attempts: {e}")
 
         return segments  # Fallback to original
 
@@ -564,10 +754,19 @@ FOLLOWING DIALOGUE (for context, DO NOT translate):
             logger.warning("Source and target languages are the same, skipping translation")
             return segments
 
-        logger.info(f"Starting translation: {len(segments)} segments ({source_lang} -> {target_lang})")
+        batch_size = self._effective_batch_size()
+        if batch_size != self.config.max_batch_size:
+            logger.info(
+                f"Auto-clamped translation batch size: {self.config.max_batch_size} -> "
+                f"{batch_size} (model: {self.config.model})"
+            )
+
+        logger.info(
+            f"Starting translation: {len(segments)} segments ({source_lang} -> {target_lang}), "
+            f"batch_size={batch_size}"
+        )
 
         translated_segments = []
-        batch_size = self.config.max_batch_size
 
         for i in range(0, len(segments), batch_size):
             batch = segments[i:i + batch_size]

@@ -13,14 +13,19 @@ class TimestampConfig:
 
     enabled: bool = True  # Enable timestamp post-processing
     mode: str = "minimal"  # Processing mode: "off", "minimal", "full"
-    min_duration: float = 0.5  # Minimum subtitle duration (seconds)
+    min_duration: float = 1.0  # Minimum subtitle duration (seconds)
     max_duration: float = 8.0  # Maximum subtitle duration (seconds)
     min_gap: float = 0.05  # Minimum gap between subtitles (seconds)
-    max_gap_warning: float = 50.0  # Gap threshold for missed speech warning (seconds)
+    max_gap_warning: float = 10.0  # Gap threshold for missed speech warning (seconds)
     chars_per_second: float = 15.0  # Reading speed for Western languages
     cjk_chars_per_second: float = 10.0  # Reading speed for CJK languages
     split_threshold: int = 30  # Minimum characters before attempting split
     split_sentences: bool = True  # Split segments by sentence using word timestamps
+    # Lead-in and linger to compensate for acoustic-alignment timestamps not being
+    # the same thing as on-screen subtitle timing. Without these, subtitles tend
+    # to feel like they "chase" the audio and disappear too fast.
+    lead_in_ms: int = 80   # Show subtitle this many ms BEFORE the first word's onset
+    linger_ms: int = 300   # Keep subtitle this many ms AFTER the last word's offset
 
 
 @dataclass
@@ -34,9 +39,12 @@ class WhisperConfig:
     vad_filter: bool = True
     batch_size: Optional[int] = None
     download_root: Optional[str] = None
-    # VAD parameters for subtitle timing optimization
-    speech_pad_ms: int = 100  # Padding around detected speech (ms)
-    min_silence_duration_ms: int = 500  # Minimum silence duration for segment breaks (ms)
+    # VAD parameters for subtitle timing optimization.
+    # 250ms padding (vs silero default 400ms) keeps subtitles tight without
+    # eating word onsets. 700ms min silence avoids merging adjacent utterances
+    # in fast dialogue while still letting the VAD bridge natural breath pauses.
+    speech_pad_ms: int = 250
+    min_silence_duration_ms: int = 700
     # WhisperX options
     use_whisperx: bool = True  # Use WhisperX for better timestamp accuracy
     whisperx_align: bool = True  # Enable forced alignment with wav2vec2
@@ -51,9 +59,12 @@ class OllamaConfig:
 
     model: str = "qwen2.5:14b"
     host: str = "http://localhost:11434"
-    temperature: float = 0.3
+    # Translation is a deterministic task — temperature=0 dramatically reduces
+    # the rate of skipped/renumbered segments compared to 0.3.
+    temperature: float = 0.0
     max_batch_size: int = 10
     max_retries: int = 3
+    request_timeout: float = 180.0  # Per-request timeout (seconds)
     prompt_template: Optional[str] = None  # Custom translation prompt (None = use default)
     prompt_template_id: Optional[str] = None  # Reference to prompt library template
 
@@ -161,6 +172,8 @@ class AppConfig:
                 "cjk_chars_per_second": self.timestamp.cjk_chars_per_second,
                 "split_threshold": self.timestamp.split_threshold,
                 "split_sentences": self.timestamp.split_sentences,
+                "lead_in_ms": self.timestamp.lead_in_ms,
+                "linger_ms": self.timestamp.linger_ms,
             },
             "max_workers": self.max_workers,
             "log_level": self.log_level,
@@ -214,6 +227,8 @@ class AppConfig:
                 "cjk_chars_per_second": self.timestamp.cjk_chars_per_second,
                 "split_threshold": self.timestamp.split_threshold,
                 "split_sentences": self.timestamp.split_sentences,
+                "lead_in_ms": self.timestamp.lead_in_ms,
+                "linger_ms": self.timestamp.linger_ms,
             },
             "max_workers": self.max_workers,
             "log_level": self.log_level,
