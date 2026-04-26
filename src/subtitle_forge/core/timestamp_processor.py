@@ -416,6 +416,8 @@ class TimestampProcessor:
                         start=prev.start,
                         end=adjusted_prev_end,
                         text=prev.text,
+                        words=prev.words,
+                        confidence=prev.confidence,
                     )
 
                 # Adjust current segment's start
@@ -425,6 +427,8 @@ class TimestampProcessor:
                     start=adjusted_start,
                     end=seg.end,
                     text=seg.text,
+                    words=seg.words,
+                    confidence=seg.confidence,
                 )
 
             result.append(seg)
@@ -484,6 +488,8 @@ class TimestampProcessor:
                     start=seg.start,
                     end=seg.start + self.min_duration,
                     text=seg.text,
+                    words=seg.words,
+                    confidence=seg.confidence,
                 )
             result.append(seg)
         return result
@@ -509,6 +515,8 @@ class TimestampProcessor:
                         start=prev.start,
                         end=new_prev_end,
                         text=prev.text,
+                        words=prev.words,
+                        confidence=prev.confidence,
                     )
 
             result.append(seg)
@@ -528,6 +536,8 @@ class TimestampProcessor:
                     start=min(seg.start, audio_duration - 0.1),
                     end=audio_duration,
                     text=seg.text,
+                    words=seg.words,
+                    confidence=seg.confidence,
                 )
             result.append(seg)
         return result
@@ -595,13 +605,15 @@ class TimestampProcessor:
                 )
 
     def _reindex(self, segments: List[SubtitleSegment]) -> List[SubtitleSegment]:
-        """Reindex segments starting from 1."""
+        """Reindex segments starting from 1, preserving all other fields."""
         return [
             SubtitleSegment(
                 index=i + 1,
                 start=seg.start,
                 end=seg.end,
                 text=seg.text,
+                words=seg.words,
+                confidence=seg.confidence,
             )
             for i, seg in enumerate(segments)
         ]
@@ -770,11 +782,11 @@ class TimestampProcessor:
         """
         Split segments by sentence boundaries using word-level timestamps.
 
-        This method detects sentence-ending punctuation and uses word timestamps
-        to calculate precise timing for each sentence, then applies:
-        1. Chain-style end time correction (each sentence ends before next starts)
-        2. Minimum display time protection (based on reading speed)
-        3. Final sentence linger (uses original segment end time)
+        Detects sentence-ending punctuation (and large word gaps) and uses
+        the word-level timestamps to derive precise per-sentence timing.
+        Sub-segments retain the corresponding word timestamps so downstream
+        passes (cap / lead-in / linger) treat them as fully aligned and do
+        not fall back to text-length heuristics.
         """
         result = []
 
@@ -793,13 +805,11 @@ class TimestampProcessor:
                 result.append(seg)
                 continue
 
-            # Apply timing corrections to sentences
-            corrected_sentences = self._apply_sentence_timing_corrections(
-                sentences, seg.end
-            )
+            # Apply timing corrections (chain-clamp + min-readable)
+            corrected_sentences = self._apply_sentence_timing_corrections(sentences)
 
-            # Create new segments for each sentence
-            for sentence_text, start_time, end_time in corrected_sentences:
+            # Create new segments for each sentence, preserving word timing.
+            for sentence_text, start_time, end_time, words in corrected_sentences:
                 if not sentence_text.strip():
                     continue
 
@@ -809,6 +819,8 @@ class TimestampProcessor:
                         start=start_time,
                         end=end_time,
                         text=sentence_text.strip(),
+                        words=words,
+                        confidence=seg.confidence,
                     )
                 )
 
@@ -816,61 +828,69 @@ class TimestampProcessor:
 
     def _apply_sentence_timing_corrections(
         self,
-        sentences: List[Tuple[str, float, float]],
-        segment_end: float,
-    ) -> List[Tuple[str, float, float]]:
+        sentences: List[Tuple[str, float, float, Optional[List[WordTiming]]]],
+    ) -> List[Tuple[str, float, float, Optional[List[WordTiming]]]]:
         """
         Apply timing corrections to split sentences.
 
-        Corrections applied:
-        1. Chain-style: each sentence's end = next sentence's start - min_gap
-        2. Minimum display time: ensure readable duration based on text length
-        3. Final sentence linger: last sentence extends to original segment end
+        Each sentence's end-time starts from its word-level acoustic boundary
+        (i.e. the moment speech actually stopped). The shared lead-in/linger
+        pass downstream then adds the configured padding uniformly.
+
+        Earlier versions extended the LAST sentence's end-time to the parent
+        segment's end-time "for lingering effect". That left short final
+        utterances (like "嗯") hanging on screen for the entire span up to
+        the next utterance — the symptom users reported as "subtitle stays
+        too long". This implementation trusts the acoustic boundary instead
+        and lets `_apply_lead_in_linger` provide a uniform tail.
+
+        Corrections still applied:
+        1. Chain-style: each non-last sentence's end is clamped before the
+           next one's start (avoiding overlap from any extension below).
+        2. Minimum readable duration: short subtitles get extended (within
+           the chain bound) so they don't flash by faster than text can
+           be read.
 
         Args:
-            sentences: List of (text, start, end) tuples from word timestamps.
-            segment_end: Original segment's end time (for final sentence).
+            sentences: 4-tuples (text, start, end, words) from word timestamps.
 
         Returns:
-            Corrected list of (text, start, end) tuples.
+            Corrected list of (text, start, end, words) tuples.
         """
         if not sentences:
             return sentences
 
         n = len(sentences)
-        corrected = []
+        corrected: List[Tuple[str, float, float, Optional[List[WordTiming]]]] = []
 
-        for i, (text, start, original_end) in enumerate(sentences):
+        for i, (text, start, original_end, words) in enumerate(sentences):
             is_last = (i == n - 1)
 
             # Calculate minimum readable duration based on text length
             char_count = len(text)
             min_readable_duration = max(
                 self.min_duration,
-                char_count / self._effective_cps
+                char_count / self._effective_cps,
             )
 
-            if is_last:
-                # Last sentence: extend to original segment end for lingering effect
-                end = segment_end
-            else:
-                # Chain-style: end just before next sentence starts
-                next_start = sentences[i + 1][1]
-                end = next_start - self.min_gap
+            # Always start from the acoustic word-level end. This is the
+            # ground truth for "when speech ended"; downstream lead-in/
+            # linger handles padding uniformly.
+            end = original_end
 
-            # Ensure minimum readable duration
+            if not is_last:
+                # Don't overlap into the next sentence's start.
+                next_start = sentences[i + 1][1]
+                end = min(end, next_start - self.min_gap)
+
+            # Ensure minimum readable duration (short utterances need to be
+            # held on screen long enough for the eye to catch them).
             actual_duration = end - start
             if actual_duration < min_readable_duration:
-                # Try to extend end time
                 desired_end = start + min_readable_duration
-
                 if is_last:
-                    # For last sentence, can extend freely (within reason)
-                    # Allow up to 2 seconds beyond segment end for lingering
-                    max_linger = segment_end + 2.0
-                    end = min(desired_end, max_linger)
+                    end = desired_end
                 else:
-                    # For non-last sentences, don't overlap with next sentence
                     next_start = sentences[i + 1][1]
                     end = min(desired_end, next_start - self.min_gap)
 
@@ -878,13 +898,13 @@ class TimestampProcessor:
             if end - start < self.min_duration:
                 end = start + self.min_duration
 
-            corrected.append((text, start, end))
+            corrected.append((text, start, end, words))
 
         return corrected
 
     def _extract_sentences_with_timing(
         self, seg: SubtitleSegment
-    ) -> List[Tuple[str, float, float]]:
+    ) -> List[Tuple[str, float, float, Optional[List[WordTiming]]]]:
         """
         Extract sentences from segment with their timing using word timestamps.
 
@@ -893,18 +913,30 @@ class TimestampProcessor:
         2. Large gaps between words (>= 0.5s) indicating natural pauses
 
         Returns:
-            List of (sentence_text, start_time, end_time) tuples.
+            List of (sentence_text, start_time, end_time, words) tuples. The
+            words list lets downstream code recognise the resulting sub-segment
+            as acoustically aligned and trust its end-time.
         """
         if not seg.words:
-            return [(seg.text, seg.start, seg.end)]
+            return [(seg.text, seg.start, seg.end, None)]
 
         # Threshold for considering a gap as sentence boundary (seconds)
         gap_threshold = 0.5
 
-        sentences = []
+        sentences: List[Tuple[str, float, float, Optional[List[WordTiming]]]] = []
         current_sentence_words: List[WordTiming] = []
         current_text_parts: List[str] = []
         prev_word_end: Optional[float] = None
+
+        def flush() -> None:
+            if not current_sentence_words:
+                return
+            sentence_text = self._join_words(current_text_parts)
+            start_time = current_sentence_words[0].start
+            end_time = current_sentence_words[-1].end
+            sentences.append(
+                (sentence_text, start_time, end_time, list(current_sentence_words))
+            )
 
         for word in seg.words:
             word_text = word.word.strip()
@@ -915,11 +947,7 @@ class TimestampProcessor:
             if prev_word_end is not None and current_sentence_words:
                 gap = word.start - prev_word_end
                 if gap >= gap_threshold:
-                    # Save current sentence before starting new one
-                    sentence_text = self._join_words(current_text_parts)
-                    start_time = current_sentence_words[0].start
-                    end_time = current_sentence_words[-1].end
-                    sentences.append((sentence_text, start_time, end_time))
+                    flush()
                     current_sentence_words = []
                     current_text_parts = []
 
@@ -929,24 +957,15 @@ class TimestampProcessor:
 
             # Check if this word ends with sentence-ending punctuation
             if self._is_sentence_end(word_text):
-                if current_sentence_words:
-                    sentence_text = self._join_words(current_text_parts)
-                    start_time = current_sentence_words[0].start
-                    end_time = current_sentence_words[-1].end
-                    sentences.append((sentence_text, start_time, end_time))
-
+                flush()
                 current_sentence_words = []
                 current_text_parts = []
                 prev_word_end = None  # Reset after punctuation split
 
         # Handle remaining words (sentence without ending punctuation)
-        if current_sentence_words:
-            sentence_text = self._join_words(current_text_parts)
-            start_time = current_sentence_words[0].start
-            end_time = current_sentence_words[-1].end
-            sentences.append((sentence_text, start_time, end_time))
+        flush()
 
-        return sentences if sentences else [(seg.text, seg.start, seg.end)]
+        return sentences if sentences else [(seg.text, seg.start, seg.end, list(seg.words))]
 
     def _is_sentence_end(self, word: str) -> bool:
         """Check if a word ends with sentence-ending punctuation."""
