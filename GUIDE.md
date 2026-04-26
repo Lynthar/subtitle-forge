@@ -120,6 +120,18 @@ subtitle-forge quickstart
 - **Fedora**: `sudo dnf install python3 python3-pip ffmpeg`
 - **Arch**: `sudo pacman -S python python-pip ffmpeg`
 
+### 可选安装项（extras）
+
+`pip install -e .` 是基础安装，根据使用场景可以追加：
+
+| 命令 | 提供的功能 |
+|------|----------|
+| `pip install -e '.[whisperx]'` | **强烈推荐**。WhisperX 用 wav2vec2 强制对齐，词级时间戳精度比基础 faster-whisper 高很多，直接影响字幕同步感 |
+| `pip install -e '.[serve]'` | 启用 HTTP 服务模式（`subtitle-forge serve`），加 fastapi + uvicorn |
+| `pip install -e '.[dev]'` | 开发依赖：pytest / ruff / mypy |
+
+可以叠加：`pip install -e '.[whisperx,serve]'`。
+
 ---
 
 ## GPU 加速设置
@@ -403,24 +415,35 @@ subtitle-forge config check --verbose
 
 ```yaml
 whisper:
-  model: large-v3            # Whisper 模型
-  device: cuda               # cuda 或 cpu
-  compute_type: float16      # float16, int8_float16, int8
+  model: large-v3                # Whisper 模型
+  device: cuda                   # cuda 或 cpu
+  compute_type: float16          # float16, int8_float16, int8
+
+  # VAD（语音活动检测）调参 - 影响转录段落的边界
+  speech_pad_ms: 250             # VAD 检测到语音前后的填充（毫秒）
+  min_silence_duration_ms: 700   # 切分相邻语句的最小静音时长（毫秒）
+
+  # WhisperX（强烈推荐，需要 [whisperx] 安装 extra）
+  use_whisperx: true             # 用 wav2vec2 做强制对齐
+  whisperx_align: true
 
 ollama:
-  model: qwen2.5:14b         # 翻译模型
+  model: qwen2.5:14b             # 翻译模型
   host: http://localhost:11434
-  temperature: 0.3
-  max_batch_size: 10
+  temperature: 0.0               # 翻译用 0；之前是 0.3 容易丢段
+  max_batch_size: 10             # 上限值；实际会按模型自适应：14B→6, ≤8B→4
+  request_timeout: 180.0         # 单次请求超时（秒）
 
 output:
   encoding: utf-8
-  keep_original: true        # 保留原语言字幕
-  bilingual: false           # 默认双语模式
+  keep_original: true            # 保留原语言字幕
+  bilingual: false               # 默认双语模式
 
-max_workers: 2               # 并发数
+max_workers: 2                   # 并发数
 log_level: INFO
 ```
+
+完整字段说明详见仓库内的 `config/default.yaml`。
 
 ---
 
@@ -442,17 +465,19 @@ subtitle-forge process <video> -t <target_lang> [options]
 | `--output-dir` | `-o` | 输出目录（默认视频所在目录） |
 | `--whisper-model` | - | 指定 Whisper 模型 |
 | `--ollama-model` | - | 指定翻译模型 |
-| `--bilingual` | - | 生成双语字幕 |
+| `--keep-original / --no-keep-original` | - | 是否同时保存原语言字幕（默认保留）|
+| `--bilingual` | - | 生成双语字幕（原文上译文下） |
 | `--whisperx / --no-whisperx` | - | 使用/不使用 WhisperX |
 | `--post-process / --no-post-process` | - | 启用/禁用时间戳后处理 |
 | `--timestamp-mode` | - | 后处理模式：off, minimal, full |
 | `--split-sentences / --no-split-sentences` | - | 按句子拆分多句字幕 |
 | `--vad-mode` | - | VAD 预设：default, aggressive, relaxed, precise |
-| `--speech-pad` | - | 语音填充时间（毫秒） |
-| `--min-silence` | - | 最小静音时长（毫秒） |
+| `--speech-pad` | - | 语音填充时间（毫秒），覆盖配置 |
+| `--min-silence` | - | 最小静音时长（毫秒），覆盖配置 |
 | `--prompt-template` | `-p` | 使用指定提示词模板 |
 | `--hf-mirror` | - | HuggingFace 镜像 URL |
-| `--save-debug-log` | - | 保存调试日志 |
+| `--save-failed-log` | - | 仅保存翻译失败的 JSON 详情 |
+| `--save-debug-log` | - | 保存完整调试日志 + 失败 JSON（推荐排查时用） |
 
 **示例**：
 
@@ -729,6 +754,92 @@ subtitle-forge config set ollama.model qwen2.5:7b
 
 ---
 
+## 字幕时间轴感觉不对
+
+字幕和声音的同步问题往往是 `lead_in_ms` / `linger_ms` 没调好。
+**先用 `--save-debug-log` 跑一次**，对照实际效果调下面的参数。
+
+### 字幕比声音晚出现（"还没看到字幕，话已经讲了一半"）
+
+```bash
+subtitle-forge config set timestamp.lead_in_ms 150   # 默认 80，调大
+```
+
+### 字幕在声音停的瞬间消失（"字还没看完就没了"）
+
+```bash
+subtitle-forge config set timestamp.linger_ms 500    # 默认 300，调大
+```
+
+### 字幕一直显示，对话结束后还在屏幕上
+
+通常是某些段在转录时 `segment.end` 被错误延伸到下一段开始或文件末尾。
+首先确认你的 `mode` 是 `minimal`（默认），它会自动修这种情况：
+
+```bash
+subtitle-forge config set timestamp.mode minimal
+```
+
+如果仍然超长，可能是没装 `[whisperx]`——基础 faster-whisper 的对齐精度会更弱。
+推荐安装：
+
+```bash
+pip install -e '.[whisperx]'
+```
+
+### 短字幕快速闪过
+
+通常发生在密集对话场景。如果字幕之间间隔过近，`lead_in_ms + linger_ms + min_gap`
+的总和会超过实际词间距，linger 会被自动截短以避免重叠。这是设计取舍——宁可短一些，
+不让两段字幕同屏。可以略微减小 lead_in/linger 试试：
+
+```bash
+subtitle-forge config set timestamp.lead_in_ms 50
+subtitle-forge config set timestamp.linger_ms 200
+```
+
+---
+
+## 翻译有些段没翻译
+
+字幕里出现少数几句仍然是原文（未翻译）。
+
+### 第一步：看失败原因
+
+跑一次带 `--save-debug-log`，打开 `<video>_debug/translation_failures.json`：
+
+```bash
+subtitle-forge process video.mp4 -t zh --save-debug-log
+```
+
+里面的 `failures[*].reason` 字段会分类：
+
+| reason | 含义 | 处理 |
+|--------|------|------|
+| `模型拒绝翻译` | LLM 内置安全限制（如成人内容） | 换更松的模型，或用 `-p adult` 模板 |
+| `内容被过滤` | 同上 | 同上 |
+| `LLM返回空响应` | 模型输出空 | 换模型或减小 batch_size |
+| `LLM响应过短` | 输出太短被认为失败 | 通常无害，可以忽略 |
+| `响应中未找到段落索引` | 解析失败 | 一般会被自动重试修复 |
+| `可能是语气词被跳过` | 模型跳过短叹词 | 可忽略 |
+
+### 第二步：手动减小 batch_size（极少需要）
+
+正常情况 batch_size 已按模型大小自动调整（14B → 6, ≤8B → 4）。
+如果某个特殊模型还是丢段：
+
+```bash
+subtitle-forge config set ollama.max_batch_size 3
+```
+
+### 第三步：换更大模型
+
+```bash
+subtitle-forge config set ollama.model qwen2.5:32b   # 需要 16GB+ VRAM
+```
+
+---
+
 ## 保存调试日志
 
 遇到问题时，保存完整日志便于排查：
@@ -832,12 +943,36 @@ subtitle-forge transcribe video.mp4 --split-sentences
 timestamp:
   enabled: true
   mode: "minimal"              # off, minimal, full
-  min_duration: 0.5            # 最小时长（秒）
-  max_duration: 8.0            # 最大时长（秒）
-  min_gap: 0.05                # 最小间隙（秒）
+  min_duration: 1.0            # 最小显示时长（秒）；< 1s 太短读不过来
+  max_duration: 8.0            # 最大显示时长（秒）
+  min_gap: 0.05                # 相邻字幕的最小间隙（秒）
+  max_gap_warning: 10.0        # 间隙超过该值会在日志警告"可能漏录"（秒）
   chars_per_second: 15.0       # 西文阅读速度
   cjk_chars_per_second: 10.0   # 中日韩阅读速度
+  split_threshold: 30          # full 模式下的最小拆分字符数
   split_sentences: true        # 句子级分割（默认启用）
+
+  # 字幕显示时间补偿（影响"字幕和声音对齐感"，毫秒）
+  # 这两个参数对所有 mode 都生效（包括 mode=off）
+  lead_in_ms: 80               # 字幕比第一个字发音提前多少出现
+  linger_ms: 300               # 字幕比最后一个字发音延后多少消失
+```
+
+#### lead-in / linger 调优指南
+
+声学模型给的"词开始/结束时间"只是发音边界，**不等于字幕该出现/消失的时间**。
+为了让观众看得舒服，行业惯例（BBC / Netflix）是字幕略早出现、声音停后再保留一会儿。
+
+- **声音出来了字幕还没出现** → 增大 `lead_in_ms`（试 120 / 150 / 180）
+- **字幕在声音停的瞬间就消失了** → 增大 `linger_ms`（试 400 / 500 / 600）
+- **字幕拖得太长侵占下一段** → 减小 `linger_ms`（如 150-200）；
+  注意：相邻段重叠时，前段的 linger 会被自动截到下一段开始前，不会真的重叠
+
+调整命令：
+
+```bash
+subtitle-forge config set timestamp.lead_in_ms 120
+subtitle-forge config set timestamp.linger_ms 500
 ```
 
 ### CJK 语言优化
