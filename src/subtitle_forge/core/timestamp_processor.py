@@ -167,6 +167,7 @@ class TimestampProcessor:
         # Mode: minimal - only essential fixes
         if self.mode == "minimal":
             logger.debug("Timestamp processing mode: minimal")
+            segments = self._cap_overlong_displays(segments)
             segments = self._fix_overlaps(segments)
             segments = self._ensure_minimum_duration(segments)
             if audio_duration:
@@ -206,6 +207,66 @@ class TimestampProcessor:
         self._log_summary()
 
         return segments
+
+    def _cap_overlong_displays(
+        self,
+        segments: List[SubtitleSegment],
+    ) -> List[SubtitleSegment]:
+        """
+        Cap segments whose end-time looks stretched past the actual speech
+        offset.
+
+        Critically, only segments that LACK word-level timestamps are
+        candidates. When word alignment succeeded, seg.end is set from
+        words[-1].end (acoustic-aligned to the moment speech actually
+        stopped), so capping based on a hypothetical "reading time" would
+        truncate genuinely slow, emphatic, or paused delivery — and leave
+        users with subtitles that vanish before the speaker finishes.
+
+        Unaligned segments fall back to the raw Whisper segment end-time,
+        which transcribers sometimes stretch up to the next utterance's
+        onset (or the end of the file) when there's no following speech to
+        bound them. Those are the ones we cap.
+        """
+        result: List[SubtitleSegment] = []
+        linger = self.linger_ms / 1000.0
+        # Speech is roughly half as fast as silent reading. Use 2× the
+        # readable-time as the speech-time estimate, then add linger and a
+        # generous soft buffer (alignment-failed segments are rare, so we
+        # err on the side of under-clamping).
+        soft_buffer = 1.5
+
+        for seg in segments:
+            # Trust acoustic-aligned end-times completely.
+            if seg.has_word_timestamps():
+                result.append(seg)
+                continue
+
+            text = seg.text.strip()
+            chars = max(1, len(text))
+            readable = chars / self._effective_cps
+            speech_time = readable * 2  # rough speech-vs-reading speed ratio
+
+            comfortable = speech_time + linger + soft_buffer
+            comfortable = max(comfortable, self.min_duration)
+            comfortable = min(comfortable, self.max_duration + linger)
+
+            actual = seg.end - seg.start
+            if actual > comfortable:
+                logger.debug(
+                    f"Capping unaligned segment {seg.index}: {actual:.2f}s -> "
+                    f"{comfortable:.2f}s (text length {chars} chars)"
+                )
+                seg = SubtitleSegment(
+                    index=seg.index,
+                    start=seg.start,
+                    end=seg.start + comfortable,
+                    text=seg.text,
+                    words=seg.words,
+                    confidence=seg.confidence,
+                )
+            result.append(seg)
+        return result
 
     def _apply_lead_in_linger(
         self,

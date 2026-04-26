@@ -624,7 +624,11 @@ FOLLOWING DIALOGUE (for context, DO NOT translate):
                     segments,
                 )
 
-                # Log compressed summary of failures for this batch
+                # Log compressed summary of failures for this batch.
+                # INFO not WARNING: batch-level issues are usually fixed by
+                # the individual retry that runs immediately after — the
+                # final WARNING (if any) is emitted from translate() once
+                # all batches have settled.
                 if self._batch_failure_indices:
                     summary_parts = []
                     for reason, indices in self._batch_failure_indices.items():
@@ -634,7 +638,7 @@ FOLLOWING DIALOGUE (for context, DO NOT translate):
                             # Show first 3 and last 2 with ellipsis
                             idx_str = f"{indices[0]}, {indices[1]}, {indices[2]}...{indices[-2]}, {indices[-1]}"
                         summary_parts.append(f"{reason} [{idx_str}]")
-                    logger.warning(f"Batch translation issues: {'; '.join(summary_parts)}")
+                    logger.info(f"Batch parse issues, retrying individually: {'; '.join(summary_parts)}")
 
                 # Check for failed translations and retry individually.
                 # Detection: translated text is identical to the original AND
