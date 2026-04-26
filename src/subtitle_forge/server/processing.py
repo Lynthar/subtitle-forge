@@ -100,9 +100,18 @@ def _run_job(job: Job, config: AppConfig, transcriber: Transcriber) -> list:
                 "cjk_chars_per_second": config.timestamp.cjk_chars_per_second,
                 "split_threshold": config.timestamp.split_threshold,
                 "split_sentences": config.timestamp.split_sentences,
+                "lead_in_ms": config.timestamp.lead_in_ms,
+                "linger_ms": config.timestamp.linger_ms,
             }
             if config.timestamp.enabled
             else None
+        )
+
+        # Honour configured VAD parameters (CLI uses the same helper)
+        from ..core.transcriber import Transcriber as TranscriberClass
+        vad_params = TranscriberClass.get_vad_parameters(
+            speech_pad_ms=config.whisper.speech_pad_ms,
+            min_silence_duration_ms=config.whisper.min_silence_duration_ms,
         )
 
         segments, info = transcriber.transcribe(
@@ -110,6 +119,7 @@ def _run_job(job: Job, config: AppConfig, transcriber: Transcriber) -> list:
             language=job.source_language,
             beam_size=config.whisper.beam_size,
             vad_filter=config.whisper.vad_filter,
+            vad_parameters=vad_params,
             post_process=config.timestamp.enabled,
             timestamp_config=timestamp_config,
         )

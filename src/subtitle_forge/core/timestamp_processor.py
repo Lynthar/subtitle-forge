@@ -55,16 +55,18 @@ class TimestampProcessor:
         self,
         mode: str = "minimal",
         language: Optional[str] = None,
-        min_duration: float = 0.5,
+        min_duration: float = 1.0,
         max_duration: float = 8.0,
         min_gap: float = 0.05,
-        max_gap_warning: float = 50.0,
+        max_gap_warning: float = 10.0,
         chars_per_second: float = 15.0,
         cjk_chars_per_second: float = 10.0,
         split_threshold: int = 30,
         split_long_segments: bool = True,
         extend_end_times: bool = True,
         split_sentences: bool = False,
+        lead_in_ms: int = 80,
+        linger_ms: int = 300,
     ):
         """
         Initialize timestamp processor.
@@ -95,6 +97,8 @@ class TimestampProcessor:
         self.split_long_segments = split_long_segments
         self.extend_end_times = extend_end_times
         self.split_sentences = split_sentences
+        self.lead_in_ms = lead_in_ms
+        self.linger_ms = linger_ms
         self._issues: List[TimestampIssue] = []
         self._gaps: List[GapInfo] = []
 
@@ -149,9 +153,15 @@ class TimestampProcessor:
                     f"Sentence splitting: {original_count} segments -> {len(segments)} segments"
                 )
 
-        # Mode: off - trust WhisperX output completely
+        # Lead-in / linger applies to ALL modes (including "off") because
+        # acoustic-aligned timestamps are word onset/offset, not on-screen
+        # subtitle timing. Without this compensation subtitles feel late and
+        # disappear too fast regardless of which mode the user picked.
+        segments = self._apply_lead_in_linger(segments, audio_duration)
+
+        # Mode: off - trust WhisperX output completely (apart from lead-in/linger)
         if self.mode == "off":
-            logger.debug("Timestamp processing mode: off (no processing)")
+            logger.debug("Timestamp processing mode: off (lead-in/linger only)")
             return self._reindex(segments)
 
         # Mode: minimal - only essential fixes
@@ -196,6 +206,70 @@ class TimestampProcessor:
         self._log_summary()
 
         return segments
+
+    def _apply_lead_in_linger(
+        self,
+        segments: List[SubtitleSegment],
+        audio_duration: Optional[float],
+    ) -> List[SubtitleSegment]:
+        """
+        Shift each segment's start earlier by lead_in_ms and extend end by
+        linger_ms, without overlapping neighbours or going outside audio bounds.
+
+        This compensates for acoustic-alignment timestamps being word onset/
+        offset times, which are too tight for comfortable subtitle reading.
+        """
+        if not segments:
+            return segments
+        if self.lead_in_ms <= 0 and self.linger_ms <= 0:
+            return segments
+
+        lead_in = self.lead_in_ms / 1000.0
+        linger = self.linger_ms / 1000.0
+        result: List[SubtitleSegment] = []
+
+        for i, seg in enumerate(segments):
+            new_start = seg.start - lead_in
+            new_end = seg.end + linger
+
+            # Don't go before audio start or before previous segment end
+            if i == 0:
+                new_start = max(new_start, 0.0)
+            else:
+                prev_end = result[-1].end
+                # Keep at least min_gap between segments
+                new_start = max(new_start, prev_end + self.min_gap)
+
+            # Don't extend past next segment's (already-shifted) start. We
+            # don't have it yet, but we can clamp to the original next.start
+            # minus lead_in (the start we'd assign next) and keep min_gap.
+            if i < len(segments) - 1:
+                next_original_start = segments[i + 1].start
+                # The next segment will want to start at next_original_start - lead_in,
+                # so we cap our end to leave a gap before that.
+                next_target_start = max(next_original_start - lead_in, new_start)
+                new_end = min(new_end, next_target_start - self.min_gap)
+
+            # Clamp to audio duration if known
+            if audio_duration and new_end > audio_duration:
+                new_end = audio_duration
+
+            # Final safety: keep ordering valid even if shifts collided
+            if new_end <= new_start:
+                new_end = new_start + max(self.min_duration, 0.1)
+
+            result.append(
+                SubtitleSegment(
+                    index=seg.index,
+                    start=new_start,
+                    end=new_end,
+                    text=seg.text,
+                    words=seg.words,
+                    confidence=seg.confidence,
+                )
+            )
+
+        return result
 
     def get_issues(self) -> List[TimestampIssue]:
         """Get list of detected timestamp issues."""

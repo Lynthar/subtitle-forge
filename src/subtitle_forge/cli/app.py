@@ -393,6 +393,8 @@ def process(
                 "cjk_chars_per_second": cfg.timestamp.cjk_chars_per_second,
                 "split_threshold": cfg.timestamp.split_threshold,
                 "split_sentences": split_sentences if split_sentences is not None else cfg.timestamp.split_sentences,
+                "lead_in_ms": cfg.timestamp.lead_in_ms,
+                "linger_ms": cfg.timestamp.linger_ms,
             } if post_process and cfg.timestamp.enabled else None
 
             segments, info = transcriber.transcribe(
