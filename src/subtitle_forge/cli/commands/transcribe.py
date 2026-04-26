@@ -194,6 +194,8 @@ def transcribe_video(
                 "cjk_chars_per_second": config.timestamp.cjk_chars_per_second,
                 "split_threshold": config.timestamp.split_threshold,
                 "split_sentences": split_sentences if split_sentences is not None else config.timestamp.split_sentences,
+                "lead_in_ms": config.timestamp.lead_in_ms,
+                "linger_ms": config.timestamp.linger_ms,
             } if post_process and config.timestamp.enabled else None
 
             segments, info = transcriber.transcribe(

@@ -359,29 +359,37 @@ class Transcriber:
 
         logger.info("Model loaded successfully")
 
-    # Optimized VAD parameters for subtitle timing accuracy
+    # VAD parameters tuned for subtitle timing.
+    # speech_pad 250ms (vs silero default 400ms) keeps segments tight without
+    # eating word onsets; min_silence 700ms avoids merging adjacent utterances
+    # in fast dialogue. Subtitle on-screen feel comes from lead-in/linger in
+    # TimestampProcessor, NOT from VAD padding — keep these two concerns
+    # separate.
     DEFAULT_VAD_PARAMETERS = {
-        "speech_pad_ms": 100,            # Reduced from 400ms to minimize early subtitle appearance
-        "min_silence_duration_ms": 500,  # Reduced from 2000ms for better segment breaks
+        "speech_pad_ms": 250,
+        "min_silence_duration_ms": 700,
     }
 
     # Preset VAD modes for different use cases
     VAD_PRESETS = {
         "default": {
-            "speech_pad_ms": 100,
-            "min_silence_duration_ms": 500,
+            "speech_pad_ms": 250,
+            "min_silence_duration_ms": 700,
         },
         "aggressive": {
-            "speech_pad_ms": 50,
-            "min_silence_duration_ms": 300,
+            # Snappier, may clip word edges — useful for very fast dialogue
+            "speech_pad_ms": 150,
+            "min_silence_duration_ms": 400,
         },
         "relaxed": {
-            "speech_pad_ms": 200,
-            "min_silence_duration_ms": 800,
+            # More forgiving, longer segments — good for narration / docs
+            "speech_pad_ms": 400,
+            "min_silence_duration_ms": 1000,
         },
         "precise": {
-            "speech_pad_ms": 30,
-            "min_silence_duration_ms": 200,
+            # Maximum boundary tightness, risks clipping
+            "speech_pad_ms": 100,
+            "min_silence_duration_ms": 300,
         },
     }
 
@@ -458,6 +466,7 @@ class Transcriber:
                 audio_path=audio_path,
                 language=language,
                 beam_size=beam_size,
+                vad_parameters=vad_parameters,
                 post_process=post_process,
                 timestamp_config=timestamp_config,
             )
@@ -480,6 +489,7 @@ class Transcriber:
         audio_path: Path,
         language: Optional[str] = None,
         beam_size: int = 5,
+        vad_parameters: Optional[dict] = None,
         post_process: bool = True,
         timestamp_config: Optional[dict] = None,
     ) -> Tuple[List[SubtitleSegment], TranscriptionInfo]:
@@ -509,12 +519,22 @@ class Transcriber:
             # Load audio
             audio = whisperx.load_audio(str(audio_path))
 
-            # Transcribe
-            # Note: WhisperX FasterWhisperPipeline doesn't accept beam_size directly
-            result = self._whisperx_model.transcribe(
-                audio,
-                language=language,
-            )
+            # Build kwargs for transcribe — WhisperX versions vary, so only
+            # pass parameters that are supported. We try the rich call first
+            # and fall back if older WhisperX rejects unknown kwargs.
+            transcribe_kwargs = {"language": language}
+            # batch_size 8 is WhisperX's documented sweet spot on a 24GB GPU.
+            # chunk_size 20s (vs default 30s) reduces the chance of slicing
+            # through the middle of a long sentence.
+            transcribe_kwargs["batch_size"] = 8
+            transcribe_kwargs["chunk_size"] = 20
+
+            try:
+                result = self._whisperx_model.transcribe(audio, **transcribe_kwargs)
+            except TypeError as e:
+                # Older WhisperX may not accept chunk_size / batch_size — strip and retry
+                logger.debug(f"WhisperX rejected extended kwargs ({e}); retrying minimal call")
+                result = self._whisperx_model.transcribe(audio, language=language)
 
             detected_language = result.get("language", language or "en")
             audio_duration = len(audio) / 16000  # WhisperX uses 16kHz
@@ -722,14 +742,16 @@ class Transcriber:
         processor = TimestampProcessor(
             mode=config.get("mode", "minimal"),
             language=language,
-            min_duration=config.get("min_duration", 0.5),
+            min_duration=config.get("min_duration", 1.0),
             max_duration=config.get("max_duration", 8.0),
             min_gap=config.get("min_gap", 0.05),
-            max_gap_warning=config.get("max_gap_warning", 50.0),
+            max_gap_warning=config.get("max_gap_warning", 10.0),
             chars_per_second=config.get("chars_per_second", 15.0),
             cjk_chars_per_second=config.get("cjk_chars_per_second", 10.0),
             split_threshold=config.get("split_threshold", 30),
             split_sentences=config.get("split_sentences", False),
+            lead_in_ms=config.get("lead_in_ms", 80),
+            linger_ms=config.get("linger_ms", 300),
         )
 
         return processor.process(segments, audio_duration)

@@ -24,6 +24,16 @@ whisper:
   # Set to null for standard inference
   batch_size: null
 
+  # VAD timing parameters. Subtitle on-screen feel is controlled by
+  # timestamp.lead_in_ms / linger_ms below — these only affect how the VAD
+  # cuts speech segments, NOT how long each subtitle is shown.
+  speech_pad_ms: 250
+  min_silence_duration_ms: 700
+
+  # WhisperX (better word-level alignment, requires the [whisperx] extra)
+  use_whisperx: true
+  whisperx_align: true
+
 ollama:
   # Ollama model name
   model: qwen2.5:14b
@@ -31,14 +41,21 @@ ollama:
   # Ollama API address
   host: http://localhost:11434
 
-  # Generation temperature (0-1, lower = more deterministic)
-  temperature: 0.3
+  # Generation temperature. Translation is deterministic — keep at 0 unless
+  # you want to experiment with creative paraphrasing.
+  temperature: 0.0
 
-  # Subtitles per translation batch
+  # Subtitles per translation batch. The translator will auto-clamp this
+  # downward for smaller models (7B / 14B) where large batches degrade
+  # parsing reliability.
   max_batch_size: 10
 
-  # Maximum retry attempts
+  # Maximum retry attempts on transport errors
   max_retries: 3
+
+  # Per-request timeout in seconds. Long-running prompts will fail fast
+  # instead of hanging the whole job.
+  request_timeout: 180.0
 
 output:
   # Output file encoding
@@ -68,13 +85,14 @@ timestamp:
   enabled: true
 
   # Processing mode:
-  #   "off"     - No processing, trust WhisperX output completely
-  #   "minimal" - Only fix overlaps and ensure minimum duration (recommended)
+  #   "off"     - No processing apart from lead-in/linger
+  #   "minimal" - Fix overlaps + ensure minimum duration (recommended)
   #   "full"    - Complete processing: split segments, extend times, fix all issues
   mode: "minimal"
 
-  # Minimum subtitle duration in seconds
-  min_duration: 0.5
+  # Minimum subtitle on-screen duration in seconds.
+  # 1.0s is the lower bound for comfortable reading; 0.5s is too short.
+  min_duration: 1.0
 
   # Maximum subtitle duration in seconds
   max_duration: 8.0
@@ -82,9 +100,9 @@ timestamp:
   # Minimum gap between subtitles in seconds
   min_gap: 0.05
 
-  # Gap threshold for "may indicate missed speech" warning (seconds)
-  # Set higher to reduce warnings for videos with sparse dialogue
-  max_gap_warning: 50.0
+  # Gap threshold for "may indicate missed speech" warning (seconds).
+  # 10s catches real misses without warning on every silent shot in a movie.
+  max_gap_warning: 10.0
 
   # Reading speed for Western languages (chars per second)
   chars_per_second: 15.0
@@ -100,3 +118,13 @@ timestamp:
   # This helps when WhisperX groups multiple sentences into one segment
   # Recommended for dialogue-heavy videos (movies, TV shows, interviews)
   split_sentences: true
+
+  # Lead-in: show each subtitle this many ms BEFORE the first word's onset.
+  # Compensates for acoustic-alignment timestamps being too tight for
+  # comfortable reading. Typical range: 50-150ms. Set 0 to disable.
+  lead_in_ms: 80
+
+  # Linger: keep each subtitle on screen this many ms AFTER the last word
+  # ends. Industry standard (BBC/Netflix) is 200-500ms. Without this,
+  # subtitles feel like they "vanish" the moment speech stops.
+  linger_ms: 300
