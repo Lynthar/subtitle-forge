@@ -197,10 +197,8 @@ def process(
         subtitle-forge process video.mp4 --target-lang zh
         subtitle-forge process video.mp4 -t zh -t ja --bilingual
     """
-    from ..core.audio import AudioExtractor
     from ..core.transcriber import Transcriber
     from ..core.translator import SubtitleTranslator, TranslationConfig
-    from ..core.subtitle import SubtitleProcessor
     from ..utils.progress import (
         SubtitleProgress,
         TranslationProgressTracker,
@@ -372,105 +370,92 @@ def process(
 
         # ========== Phase 2: Main processing (single progress bar) ==========
 
+        from contextlib import contextmanager
+        from ..core.pipeline import PipelineHooks, run_pipeline
+
         with progress.track_video(video.name) as tracker:
-            # 1. Extract audio
             tracker.set_description(f"[1/4] Extracting audio: {video.name}")
-            extractor = AudioExtractor()
-            audio_path = extractor.extract(video)
-            tracker.update("[1/4] Audio extraction complete")
+            phase_3_started = [False]  # mutable so nested closures can flip it
 
-            # 2. Transcribe
-            tracker.set_description(f"[2/4] Transcribing: {video.name}")
+            def _start_phase_3():
+                """Run once on the first translate-or-skip event to keep the
+                visual sequence (audio→transcribe→original→translation) the
+                same as the pre-refactor flow."""
+                if phase_3_started[0]:
+                    return
+                phase_3_started[0] = True
+                tracker.set_description(f"[3/4] Translating: {video.name}")
+                # Pause main progress bar for translation (avoid two bars)
+                tracker.pause()
+                print_translation_explainer()
 
-            # Build timestamp config from settings
-            timestamp_config = {
-                "mode": timestamp_mode or cfg.timestamp.mode,
-                "min_duration": cfg.timestamp.min_duration,
-                "max_duration": cfg.timestamp.max_duration,
-                "min_gap": cfg.timestamp.min_gap,
-                "max_gap_warning": cfg.timestamp.max_gap_warning,
-                "chars_per_second": cfg.timestamp.chars_per_second,
-                "cjk_chars_per_second": cfg.timestamp.cjk_chars_per_second,
-                "split_threshold": cfg.timestamp.split_threshold,
-                "split_sentences": split_sentences if split_sentences is not None else cfg.timestamp.split_sentences,
-                "lead_in_ms": cfg.timestamp.lead_in_ms,
-                "linger_ms": cfg.timestamp.linger_ms,
-            } if post_process and cfg.timestamp.enabled else None
+            def hook_audio_extracted(_path):
+                tracker.update("[1/4] Audio extraction complete")
+                tracker.set_description(f"[2/4] Transcribing: {video.name}")
 
-            segments, info = transcriber.transcribe(
-                audio_path,
-                language=source_lang,
-                beam_size=cfg.whisper.beam_size,
-                vad_filter=cfg.whisper.vad_filter,
-                vad_parameters=vad_params,
-                post_process=post_process and cfg.timestamp.enabled,
-                timestamp_config=timestamp_config,
-            )
-            detected_lang = info.language
-            tracker.update("[2/4] Transcription complete")
+            def hook_transcribe_complete(_seg_count, _detected_lang):
+                tracker.update("[2/4] Transcription complete")
 
-            # 3. Save original subtitles
-            subtitle_processor = SubtitleProcessor()
-            if keep_original:
-                original_srt = output_dir / f"{video.stem}.{detected_lang}.srt"
-                subtitle_processor.save(segments, original_srt)
-                print_info(f"Original subtitles saved: {original_srt}")
+            def hook_original_saved(path):
+                print_info(f"Original subtitles saved: {path}")
 
-            # 3. Translate (models already prepared in Phase 1)
-            tracker.set_description(f"[3/4] Translating: {video.name}")
+            def hook_translation_skipped(lang):
+                _start_phase_3()
+                print_info(f"Skipping translation to {lang} (same as source)")
 
-            # Pause main progress bar for translation (to avoid two progress bars)
-            tracker.pause()
-
-            # Show explanation for first-time users
-            print_translation_explainer()
-
-            for lang in target_lang:
-                if lang == detected_lang:
-                    print_info(f"Skipping translation to {lang} (same as source)")
-                    continue
-
+            @contextmanager
+            def trans_progress_ctx(lang, total):
+                _start_phase_3()
                 lang_name = translator.LANGUAGE_NAMES.get(lang, lang)
                 print_info(f"Translating to {lang_name}...")
-
-                # Use enhanced translation progress tracker
                 with TranslationProgressTracker(
-                    total_segments=len(segments),
+                    total_segments=total,
                     batch_size=cfg.ollama.max_batch_size,
                     target_lang=lang_name,
                 ) as trans_progress:
-                    translated = translator.translate(
-                        segments,
-                        detected_lang,
-                        lang,
-                        progress_callback=trans_progress.update,
-                    )
+                    yield trans_progress.update
 
-                if bilingual:
-                    merged = subtitle_processor.merge_bilingual(segments, translated)
-                    output_path = output_dir / f"{video.stem}.{detected_lang}-{lang}.srt"
-                    subtitle_processor.save(merged, output_path)
-                else:
-                    output_path = output_dir / f"{video.stem}.{lang}.srt"
-                    subtitle_processor.save(translated, output_path)
+            def hook_translation_saved(path, _label):
+                print_info(f"Translated subtitles saved: {path}")
 
-                print_info(f"Translated subtitles saved: {output_path}")
+            result = run_pipeline(
+                video, cfg,
+                transcriber=transcriber,
+                translator=translator,
+                target_languages=target_lang,
+                output_dir=output_dir,
+                source_language=source_lang,
+                keep_original=keep_original,
+                bilingual=bilingual,
+                timestamp_mode=timestamp_mode,
+                split_sentences=split_sentences,
+                post_process=post_process,
+                vad_parameters=vad_params,
+                hooks=PipelineHooks(
+                    on_audio_extracted=hook_audio_extracted,
+                    on_transcribe_complete=hook_transcribe_complete,
+                    on_original_saved=hook_original_saved,
+                    on_translation_skipped=hook_translation_skipped,
+                    translation_progress_ctx=trans_progress_ctx,
+                    on_translation_saved=hook_translation_saved,
+                ),
+            )
 
-            # Resume main progress bar
-            tracker.resume()
+            # Only resume if we actually paused (in case nothing translatable)
+            if phase_3_started[0]:
+                tracker.resume()
             tracker.update("[3/4] Translation complete")
 
-            # 5. Cleanup
+            # Cleanup — pipeline handles the audio scratch file itself.
             tracker.set_description("[4/4] Cleaning up")
-            audio_path.unlink(missing_ok=True)
             transcriber.unload_model()
             tracker.update("[4/4] Complete")
 
         print_success(
             f"Processing complete!\n"
             f"  Video: {video.name}\n"
-            f"  Detected language: {detected_lang} ({info.language_probability:.1%})\n"
-            f"  Segments: {len(segments)}\n"
+            f"  Detected language: {result.detected_language} ({result.language_probability:.1%})\n"
+            f"  Segments: {result.segment_count}\n"
             f"  Output directory: {output_dir}"
         )
 
