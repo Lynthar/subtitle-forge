@@ -213,42 +213,49 @@ class TimestampProcessor:
         segments: List[SubtitleSegment],
     ) -> List[SubtitleSegment]:
         """
-        Cap each segment's duration based on its text length using the
-        language-appropriate reading speed.
+        Cap segments whose end-time looks stretched past the actual speech
+        offset.
 
-        Without this, transcribers occasionally emit segments whose end-time
-        stretches well past the actual word offset (typical when there is no
-        next utterance to bound the segment), making the subtitle linger on
-        screen for many seconds after speech has ended.
+        Critically, only segments that LACK word-level timestamps are
+        candidates. When word alignment succeeded, seg.end is set from
+        words[-1].end (acoustic-aligned to the moment speech actually
+        stopped), so capping based on a hypothetical "reading time" would
+        truncate genuinely slow, emphatic, or paused delivery — and leave
+        users with subtitles that vanish before the speaker finishes.
 
-        Allows generous headroom — a comfortable display window is the
-        readable time at full speed, plus the configured linger, plus a soft
-        buffer for natural pauses ("uh...", breaths, dramatic stops). Only
-        clamps when the actual duration far exceeds that.
+        Unaligned segments fall back to the raw Whisper segment end-time,
+        which transcribers sometimes stretch up to the next utterance's
+        onset (or the end of the file) when there's no following speech to
+        bound them. Those are the ones we cap.
         """
         result: List[SubtitleSegment] = []
         linger = self.linger_ms / 1000.0
-        # Soft buffer for natural pauses — generous enough that
-        # genuinely-paused dialogue isn't truncated, tight enough that a
-        # 1-character utterance can't display for 8 seconds.
-        soft_buffer = 1.2
+        # Speech is roughly half as fast as silent reading. Use 2× the
+        # readable-time as the speech-time estimate, then add linger and a
+        # generous soft buffer (alignment-failed segments are rare, so we
+        # err on the side of under-clamping).
+        soft_buffer = 1.5
 
         for seg in segments:
+            # Trust acoustic-aligned end-times completely.
+            if seg.has_word_timestamps():
+                result.append(seg)
+                continue
+
             text = seg.text.strip()
             chars = max(1, len(text))
             readable = chars / self._effective_cps
+            speech_time = readable * 2  # rough speech-vs-reading speed ratio
 
-            # Comfortable display window. Scale buffer with content length so
-            # a long subtitle gets proportionally more grace.
-            comfortable = readable + linger + soft_buffer + (readable * 0.5)
+            comfortable = speech_time + linger + soft_buffer
             comfortable = max(comfortable, self.min_duration)
             comfortable = min(comfortable, self.max_duration + linger)
 
             actual = seg.end - seg.start
             if actual > comfortable:
                 logger.debug(
-                    f"Capping segment {seg.index}: {actual:.2f}s -> {comfortable:.2f}s "
-                    f"(text length {chars} chars)"
+                    f"Capping unaligned segment {seg.index}: {actual:.2f}s -> "
+                    f"{comfortable:.2f}s (text length {chars} chars)"
                 )
                 seg = SubtitleSegment(
                     index=seg.index,
