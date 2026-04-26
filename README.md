@@ -35,7 +35,13 @@ ollama serve
 ### 3. Install subtitle-forge
 
 ```bash
+# Base install
 pip install -e .
+
+# Strongly recommended: WhisperX provides forced wav2vec2 alignment for
+# accurate word-level timestamps. Without it, subtitle timing falls back
+# to faster-whisper's lower-precision word timestamps.
+pip install -e '.[whisperx]'
 ```
 
 ### 4. Run Setup Wizard
@@ -43,6 +49,10 @@ pip install -e .
 ```bash
 subtitle-forge quickstart
 ```
+
+The wizard checks ffmpeg / Ollama / GPU availability and downloads the
+default Whisper + Ollama models so the first real run isn't blocked on
+multi-GB downloads.
 
 ### 5. Generate Subtitles
 
@@ -208,6 +218,19 @@ subtitle-forge config set ollama.model qwen2.5:32b
 # System check
 subtitle-forge config check --verbose
 ```
+
+Full field reference with defaults and explanations: see `config/default.yaml`.
+
+### Troubleshooting flag
+
+```bash
+# Saves run.log (DEBUG) and translation_failures.json next to the output:
+subtitle-forge process video.mp4 -t zh --save-debug-log
+```
+
+This is the first thing to try when something feels off — the saved log
+is detailed enough to diagnose timing issues, missed translations, model
+download failures, etc.
 
 ## Supported Languages
 

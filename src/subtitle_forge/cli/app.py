@@ -231,8 +231,11 @@ def process(
         debug_dir.mkdir(exist_ok=True)
         debug_log_path = str(debug_dir / "run.log")
         debug_failed_log_path = str(debug_dir / "translation_failures.json")
-        # Re-setup logging with DEBUG level to the debug log file
-        setup_logging("DEBUG", debug_log_path)
+        # File handler captures DEBUG; console stays at INFO so the user's
+        # terminal isn't flooded with third-party stack traces (notably
+        # torio's FFmpeg-extension probing fallbacks, which Rich renders
+        # as full tracebacks even though they're harmless DEBUG noise).
+        setup_logging(level="DEBUG", log_file=debug_log_path, console_level="INFO")
 
     # Build VAD parameters
     from ..core.transcriber import Transcriber as TranscriberClass
