@@ -167,6 +167,7 @@ class TimestampProcessor:
         # Mode: minimal - only essential fixes
         if self.mode == "minimal":
             logger.debug("Timestamp processing mode: minimal")
+            segments = self._cap_overlong_displays(segments)
             segments = self._fix_overlaps(segments)
             segments = self._ensure_minimum_duration(segments)
             if audio_duration:
@@ -206,6 +207,59 @@ class TimestampProcessor:
         self._log_summary()
 
         return segments
+
+    def _cap_overlong_displays(
+        self,
+        segments: List[SubtitleSegment],
+    ) -> List[SubtitleSegment]:
+        """
+        Cap each segment's duration based on its text length using the
+        language-appropriate reading speed.
+
+        Without this, transcribers occasionally emit segments whose end-time
+        stretches well past the actual word offset (typical when there is no
+        next utterance to bound the segment), making the subtitle linger on
+        screen for many seconds after speech has ended.
+
+        Allows generous headroom — a comfortable display window is the
+        readable time at full speed, plus the configured linger, plus a soft
+        buffer for natural pauses ("uh...", breaths, dramatic stops). Only
+        clamps when the actual duration far exceeds that.
+        """
+        result: List[SubtitleSegment] = []
+        linger = self.linger_ms / 1000.0
+        # Soft buffer for natural pauses — generous enough that
+        # genuinely-paused dialogue isn't truncated, tight enough that a
+        # 1-character utterance can't display for 8 seconds.
+        soft_buffer = 1.2
+
+        for seg in segments:
+            text = seg.text.strip()
+            chars = max(1, len(text))
+            readable = chars / self._effective_cps
+
+            # Comfortable display window. Scale buffer with content length so
+            # a long subtitle gets proportionally more grace.
+            comfortable = readable + linger + soft_buffer + (readable * 0.5)
+            comfortable = max(comfortable, self.min_duration)
+            comfortable = min(comfortable, self.max_duration + linger)
+
+            actual = seg.end - seg.start
+            if actual > comfortable:
+                logger.debug(
+                    f"Capping segment {seg.index}: {actual:.2f}s -> {comfortable:.2f}s "
+                    f"(text length {chars} chars)"
+                )
+                seg = SubtitleSegment(
+                    index=seg.index,
+                    start=seg.start,
+                    end=seg.start + comfortable,
+                    text=seg.text,
+                    words=seg.words,
+                    confidence=seg.confidence,
+                )
+            result.append(seg)
+        return result
 
     def _apply_lead_in_linger(
         self,
