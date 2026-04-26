@@ -1,12 +1,12 @@
-"""Video processing pipeline used by the HTTP server.
+"""Video processing entry point for the HTTP server.
 
-This is the same audio→transcribe→translate→save flow as `cli/commands/process`,
-factored as a sync function with no progress-bar / interactive-prompt baggage.
-The runner calls it inside `loop.run_in_executor`, so it runs off the event loop.
+Wraps the shared `core/pipeline.run_pipeline` with server-specific lifecycle:
+a TranscriberHolder so the Whisper model stays resident across jobs, and
+job-state mutation so callers polling /jobs/{id} see the detected language
+as soon as transcription completes.
 
-The Transcriber is held by the holder for the lifetime of the server — Whisper
-model load takes 10–30s and is wasteful to repeat per job. The Translator is
-constructed per call (it's just an Ollama HTTP client wrapper, no state).
+The runner invokes `make_processor(...)`'s closure inside
+`loop.run_in_executor`, so this all runs off the event loop.
 """
 
 import logging
@@ -14,8 +14,7 @@ import threading
 from pathlib import Path
 from typing import Optional
 
-from ..core.audio import AudioExtractor
-from ..core.subtitle import SubtitleProcessor
+from ..core.pipeline import build_vad_parameters, run_pipeline
 from ..core.transcriber import Transcriber
 from ..core.translator import SubtitleTranslator, TranslationConfig
 from ..models.config import AppConfig
@@ -82,94 +81,40 @@ def make_processor(config: AppConfig, holder: TranscriberHolder):
 
 def _run_job(job: Job, config: AppConfig, transcriber: Transcriber) -> list:
     video_path = Path(job.video_path)
-    out_dir = video_path.parent
-    stem = video_path.stem
 
-    extractor = AudioExtractor()
-    audio_path = extractor.extract(video_path)
-
-    try:
-        timestamp_config = (
-            {
-                "mode": config.timestamp.mode,
-                "min_duration": config.timestamp.min_duration,
-                "max_duration": config.timestamp.max_duration,
-                "min_gap": config.timestamp.min_gap,
-                "max_gap_warning": config.timestamp.max_gap_warning,
-                "chars_per_second": config.timestamp.chars_per_second,
-                "cjk_chars_per_second": config.timestamp.cjk_chars_per_second,
-                "split_threshold": config.timestamp.split_threshold,
-                "split_sentences": config.timestamp.split_sentences,
-                "lead_in_ms": config.timestamp.lead_in_ms,
-                "linger_ms": config.timestamp.linger_ms,
-            }
-            if config.timestamp.enabled
-            else None
+    translator = SubtitleTranslator(
+        TranslationConfig(
+            model=config.ollama.model,
+            host=config.ollama.host,
+            temperature=config.ollama.temperature,
+            max_batch_size=config.ollama.max_batch_size,
+            prompt_template=config.ollama.prompt_template,
+            prompt_template_id=config.ollama.prompt_template_id,
         )
+    )
 
-        # Honour configured VAD parameters (CLI uses the same helper)
-        from ..core.transcriber import Transcriber as TranscriberClass
-        vad_params = TranscriberClass.get_vad_parameters(
-            speech_pad_ms=config.whisper.speech_pad_ms,
-            min_silence_duration_ms=config.whisper.min_silence_duration_ms,
-        )
+    vad_params = build_vad_parameters(config)
 
-        segments, info = transcriber.transcribe(
-            audio_path,
-            language=job.source_language,
-            beam_size=config.whisper.beam_size,
-            vad_filter=config.whisper.vad_filter,
-            vad_parameters=vad_params,
-            post_process=config.timestamp.enabled,
-            timestamp_config=timestamp_config,
-        )
+    result = run_pipeline(
+        video_path,
+        config,
+        transcriber=transcriber,
+        translator=translator,
+        target_languages=job.target_languages,
+        output_dir=video_path.parent,
+        source_language=job.source_language,
+        keep_original=job.keep_original,
+        bilingual=job.bilingual,
+        vad_parameters=vad_params,
+        # No hooks — server runs silently; logging inside translator/
+        # transcriber covers operational visibility.
+    )
 
-        detected_lang = info.language
-        # Surface the detected language back through the job record so callers
-        # polling /jobs/{id} see it once transcription completes.
-        job.source_language = detected_lang
+    # Surface the detected language back through the job record so callers
+    # polling /jobs/{id} see it once transcription completes.
+    job.source_language = result.detected_language
 
-        subtitle_processor = SubtitleProcessor()
-        outputs: list = []
-
-        if job.keep_original:
-            original_srt = out_dir / f"{stem}.{detected_lang}.srt"
-            subtitle_processor.save(segments, original_srt)
-            outputs.append({"language": detected_lang, "path": str(original_srt)})
-
-        translator = SubtitleTranslator(
-            TranslationConfig(
-                model=config.ollama.model,
-                host=config.ollama.host,
-                temperature=config.ollama.temperature,
-                max_batch_size=config.ollama.max_batch_size,
-                prompt_template=config.ollama.prompt_template,
-                prompt_template_id=config.ollama.prompt_template_id,
-            )
-        )
-
-        for lang in job.target_languages:
-            if lang == detected_lang:
-                logger.info("Skipping translation to %s (same as source)", lang)
-                continue
-
-            translated = translator.translate(segments, detected_lang, lang)
-
-            if job.bilingual:
-                merged = subtitle_processor.merge_bilingual(segments, translated)
-                out_path = out_dir / f"{stem}.{detected_lang}-{lang}.srt"
-                subtitle_processor.save(merged, out_path)
-                outputs.append({"language": f"{detected_lang}-{lang}", "path": str(out_path)})
-            else:
-                out_path = out_dir / f"{stem}.{lang}.srt"
-                subtitle_processor.save(translated, out_path)
-                outputs.append({"language": lang, "path": str(out_path)})
-
-        return outputs
-
-    finally:
-        # Always remove the extracted audio scratch file.
-        try:
-            audio_path.unlink(missing_ok=True)
-        except OSError as e:
-            logger.warning("Failed to clean up audio scratch file %s: %s", audio_path, e)
+    return [
+        {"language": o.language, "path": str(o.path)}
+        for o in result.outputs
+    ]

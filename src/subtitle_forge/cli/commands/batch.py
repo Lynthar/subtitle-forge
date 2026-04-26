@@ -85,6 +85,7 @@ def batch_process(
         subtitle-forge batch --file-list videos.txt -t zh
     """
     from ...core.audio import AudioExtractor
+    from ...core.pipeline import build_timestamp_config
     from ...core.transcriber import Transcriber
     from ...core.translator import SubtitleTranslator, TranslationConfig
     from ...core.subtitle import SubtitleProcessor
@@ -153,22 +154,7 @@ def batch_process(
         hf_endpoint=config.whisper.hf_endpoint,
     )
 
-    # Build timestamp config — must include all fields the processor knows
-    # about. Missing fields silently fall back to dataclass defaults, which
-    # would shadow user-edited config values.
-    timestamp_config = {
-        "mode": config.timestamp.mode,
-        "min_duration": config.timestamp.min_duration,
-        "max_duration": config.timestamp.max_duration,
-        "min_gap": config.timestamp.min_gap,
-        "max_gap_warning": config.timestamp.max_gap_warning,
-        "chars_per_second": config.timestamp.chars_per_second,
-        "cjk_chars_per_second": config.timestamp.cjk_chars_per_second,
-        "split_threshold": config.timestamp.split_threshold,
-        "split_sentences": config.timestamp.split_sentences,
-        "lead_in_ms": config.timestamp.lead_in_ms,
-        "linger_ms": config.timestamp.linger_ms,
-    } if config.timestamp.enabled else None
+    timestamp_config = build_timestamp_config(config)
     translator = SubtitleTranslator(
         TranslationConfig(
             model=config.ollama.model,

@@ -80,6 +80,7 @@ def transcribe_video(
         subtitle-forge transcribe video.mp4 --language en --model large-v3
     """
     from ...core.audio import AudioExtractor
+    from ...core.pipeline import build_timestamp_config
     from ...core.transcriber import Transcriber
     from ...core.subtitle import SubtitleProcessor
     from ...models.config import AppConfig
@@ -183,20 +184,16 @@ def transcribe_video(
             # 2. Transcribe (model already prepared)
             tracker.set_description("Transcribing...")
 
-            # Build timestamp config from settings
-            timestamp_config = {
-                "mode": timestamp_mode or config.timestamp.mode,
-                "min_duration": config.timestamp.min_duration,
-                "max_duration": config.timestamp.max_duration,
-                "min_gap": config.timestamp.min_gap,
-                "max_gap_warning": config.timestamp.max_gap_warning,
-                "chars_per_second": config.timestamp.chars_per_second,
-                "cjk_chars_per_second": config.timestamp.cjk_chars_per_second,
-                "split_threshold": config.timestamp.split_threshold,
-                "split_sentences": split_sentences if split_sentences is not None else config.timestamp.split_sentences,
-                "lead_in_ms": config.timestamp.lead_in_ms,
-                "linger_ms": config.timestamp.linger_ms,
-            } if post_process and config.timestamp.enabled else None
+            # Build timestamp config (None when post-processing is disabled)
+            timestamp_config = (
+                build_timestamp_config(
+                    config,
+                    mode_override=timestamp_mode,
+                    split_sentences_override=split_sentences,
+                )
+                if post_process
+                else None
+            )
 
             segments, info = transcriber.transcribe(
                 audio_path,
