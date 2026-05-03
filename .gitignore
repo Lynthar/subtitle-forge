@@ -58,3 +58,6 @@ config/user.yaml
 *.vtt
 *.wav
 *.mp3
+
+# ai
+CLAUDE.md
