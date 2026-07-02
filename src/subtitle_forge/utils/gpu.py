@@ -17,10 +17,13 @@ def get_available_vram() -> int:
 
         if torch.cuda.is_available():
             device = torch.cuda.current_device()
-            total = torch.cuda.get_device_properties(device).total_memory
-            reserved = torch.cuda.memory_reserved(device)
-            available = (total - reserved) // (1024 * 1024)
-            return available
+            # mem_get_info returns (free, total) from the CUDA driver, so memory
+            # held by OTHER processes counts against "free". The old
+            # `total - memory_reserved` only saw this process's caching allocator
+            # (≈0 on a fresh start), so it reported almost all VRAM as available
+            # and select_optimal_model could pick a model too big to fit.
+            free_bytes, _total = torch.cuda.mem_get_info(device)
+            return free_bytes // (1024 * 1024)
     except ImportError:
         logger.warning("PyTorch not installed, cannot detect GPU VRAM")
     except Exception as e:

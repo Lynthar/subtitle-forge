@@ -92,8 +92,16 @@ def build_timestamp_config(
     """
     if not config.timestamp.enabled:
         return None
+    mode = mode_override or config.timestamp.mode
+    valid_modes = {"off", "minimal", "full"}
+    if mode not in valid_modes:
+        # Without this, an unknown mode (e.g. a typo'd `--timestamp-mode min`)
+        # silently fell through to the "full" branch in TimestampProcessor.
+        raise ValueError(
+            f"Invalid timestamp mode {mode!r}; choose one of {sorted(valid_modes)}"
+        )
     return {
-        "mode": mode_override or config.timestamp.mode,
+        "mode": mode,
         "min_duration": config.timestamp.min_duration,
         "max_duration": config.timestamp.max_duration,
         "min_gap": config.timestamp.min_gap,
@@ -166,7 +174,7 @@ def run_pipeline(
     """
     hooks = hooks or PipelineHooks()
     extractor = AudioExtractor()
-    subtitle_processor = SubtitleProcessor()
+    subtitle_processor = SubtitleProcessor(encoding=config.output.encoding)
     stem = video_path.stem
 
     audio_path = extractor.extract(video_path)
@@ -185,6 +193,7 @@ def run_pipeline(
             language=source_language,
             beam_size=config.whisper.beam_size,
             vad_filter=config.whisper.vad_filter,
+            batch_size=config.whisper.batch_size,
             vad_parameters=vad_parameters,
             post_process=post_process and config.timestamp.enabled,
             timestamp_config=timestamp_config,
@@ -229,7 +238,9 @@ def run_pipeline(
                 )
 
             if bilingual:
-                merged = subtitle_processor.merge_bilingual(segments, translated)
+                merged = subtitle_processor.merge_bilingual(
+                    segments, translated, original_on_top=config.output.original_on_top
+                )
                 out_path = output_dir / f"{stem}.{detected_language}-{lang}.srt"
                 subtitle_processor.save(merged, out_path)
                 label = f"{detected_language}-{lang}"

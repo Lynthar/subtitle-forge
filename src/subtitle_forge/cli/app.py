@@ -19,12 +19,18 @@ app = typer.Typer(
 
 console = Console()
 
-# Register subcommands
-app.add_typer(transcribe.app, name="transcribe", help="Transcribe video to subtitles")
-app.add_typer(translate.app, name="translate", help="Translate existing subtitles")
-app.add_typer(batch.app, name="batch", help="Batch process multiple videos")
+# Register subcommands.
+# transcribe/translate/batch/serve each expose a single action, so they are
+# registered as plain root commands (`subtitle-forge transcribe video.mp4`).
+# NOTE: they must NOT be attached via add_typer() — a sub-Typer added that way
+# is a Click *group* and never auto-invokes a lone command, so the documented
+# `subtitle-forge transcribe <video>` form would fail with "No such command".
+# `config` is a genuine multi-command group, so it stays a sub-Typer.
+app.command("transcribe", help="Transcribe video to subtitles")(transcribe.transcribe_video)
+app.command("translate", help="Translate existing subtitles")(translate.translate_subtitle)
+app.command("batch", help="Batch process multiple videos")(batch.batch_process)
+app.command("serve", help="Run as an HTTP server (job-based REST API)")(serve.serve)
 app.add_typer(config.app, name="config", help="Configuration management")
-app.add_typer(serve.app, name="serve", help="Run as an HTTP server (job-based REST API)")
 
 # Global config
 _config: Optional[AppConfig] = None
@@ -120,15 +126,15 @@ def process(
         "--ollama-model",
         help="Ollama model name",
     ),
-    keep_original: bool = typer.Option(
-        True,
+    keep_original: Optional[bool] = typer.Option(
+        None,
         "--keep-original/--no-keep-original",
-        help="Keep original language subtitles",
+        help="Keep original language subtitles (default: config output.keep_original)",
     ),
-    bilingual: bool = typer.Option(
-        False,
-        "--bilingual",
-        help="Generate bilingual subtitles",
+    bilingual: Optional[bool] = typer.Option(
+        None,
+        "--bilingual/--no-bilingual",
+        help="Generate bilingual subtitles (default: config output.bilingual)",
     ),
     # VAD options for subtitle timing
     vad_mode: Optional[str] = typer.Option(
@@ -220,6 +226,10 @@ def process(
         cfg.ollama.prompt_template_id = prompt_template
 
     output_dir = output_dir or video.parent
+    # Fall back to config when the flag wasn't passed (typer default None), so
+    # output.keep_original / output.bilingual in config.yaml actually take effect.
+    keep_original = keep_original if keep_original is not None else cfg.output.keep_original
+    bilingual = bilingual if bilingual is not None else cfg.output.bilingual
     progress = SubtitleProgress()
 
     # Handle --save-debug-log option
@@ -237,9 +247,14 @@ def process(
         # as full tracebacks even though they're harmless DEBUG noise).
         setup_logging(level="DEBUG", log_file=debug_log_path, console_level="INFO")
 
-    # Build VAD parameters
-    from ..core.transcriber import Transcriber as TranscriberClass
-    vad_params = TranscriberClass.get_vad_parameters(
+    # Build VAD parameters with full 3-layer precedence:
+    #   CLI flag > --vad-mode preset > config.whisper.{speech_pad_ms,min_silence_duration_ms}
+    # Using build_vad_parameters (not the bare Transcriber.get_vad_parameters,
+    # which ignores config) is what makes the configured VAD tuning actually
+    # take effect on the CLI, matching the server path.
+    from ..core.pipeline import build_vad_parameters
+    vad_params = build_vad_parameters(
+        cfg,
         mode=vad_mode,
         speech_pad_ms=speech_pad,
         min_silence_duration_ms=min_silence,
@@ -329,6 +344,8 @@ def process(
                 host=cfg.ollama.host,
                 temperature=cfg.ollama.temperature,
                 max_batch_size=cfg.ollama.max_batch_size,
+                max_retries=cfg.ollama.max_retries,
+                request_timeout=cfg.ollama.request_timeout,
                 prompt_template=cfg.ollama.prompt_template,
                 prompt_template_id=cfg.ollama.prompt_template_id,
                 save_failed_log=effective_save_failed_log,
@@ -413,7 +430,9 @@ def process(
                 print_info(f"Translating to {lang_name}...")
                 with TranslationProgressTracker(
                     total_segments=total,
-                    batch_size=cfg.ollama.max_batch_size,
+                    # Use the model-clamped size the translator will actually use
+                    # (7B/14B clamp below max_batch_size), so "batch x/y" is right.
+                    batch_size=translator.effective_batch_size(),
                     target_lang=lang_name,
                 ) as trans_progress:
                     yield trans_progress.update

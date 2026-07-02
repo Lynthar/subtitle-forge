@@ -97,13 +97,19 @@ class OllamaModelManager:
         """
         try:
             available_models = self.list_models()
-            model_base = model.split(":")[0]
 
-            for available in available_models:
-                if model == available or model_base in available:
-                    return True
+            # Exact (tag-aware) match. The old `model_base in available`
+            # substring test was a false-positive machine: requesting
+            # "qwen2.5:32b" with only "qwen2.5:7b" installed reported "available"
+            # (because "qwen2.5" is a substring), so the download was skipped and
+            # translation later died with model-not-found — after transcription
+            # had already run. Ollama treats a bare name as its ":latest" tag, so
+            # normalize both sides before comparing.
+            def _normalize(name: str) -> str:
+                return name if ":" in name else f"{name}:latest"
 
-            return False
+            target = _normalize(model)
+            return any(_normalize(a) == target for a in available_models)
 
         except Exception as e:
             logger.error(f"Failed to check model availability: {e}")

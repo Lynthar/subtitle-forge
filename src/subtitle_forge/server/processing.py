@@ -88,6 +88,8 @@ def _run_job(job: Job, config: AppConfig, transcriber: Transcriber) -> list:
             host=config.ollama.host,
             temperature=config.ollama.temperature,
             max_batch_size=config.ollama.max_batch_size,
+            max_retries=config.ollama.max_retries,
+            request_timeout=config.ollama.request_timeout,
             prompt_template=config.ollama.prompt_template,
             prompt_template_id=config.ollama.prompt_template_id,
         )

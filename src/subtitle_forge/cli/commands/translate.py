@@ -1,15 +1,11 @@
 """Translate command."""
 
+import re
 from pathlib import Path
 from typing import Optional
 
 import typer
 
-app = typer.Typer(no_args_is_help=True)
-
-
-@app.command("run")
-@app.command(hidden=True)  # Default command
 def translate_subtitle(
     subtitle: Path = typer.Argument(..., help="Subtitle file path (SRT)", exists=True),
     target_lang: str = typer.Option(
@@ -58,9 +54,11 @@ def translate_subtitle(
 
     # Try to detect source language from filename if not specified
     if source_lang is None:
-        # Try pattern: name.lang.srt
+        # Try pattern: name.lang.srt — validate the *shape* of the last segment
+        # ("en", "zh", "yue", "zh-TW") so a resolution/codec tag like the "1080p"
+        # in "video.1080p.srt" isn't mistaken for a source language.
         parts = subtitle.stem.split(".")
-        if len(parts) >= 2 and len(parts[-1]) in (2, 5):  # 2 for 'en', 5 for 'zh-TW'
+        if len(parts) >= 2 and re.fullmatch(r"[a-z]{2,3}(-[A-Z]{2})?", parts[-1]):
             source_lang = parts[-1]
             print_info(f"Detected source language from filename: {source_lang}")
         else:
@@ -98,6 +96,10 @@ def translate_subtitle(
                     host=config.ollama.host,
                     temperature=config.ollama.temperature,
                     max_batch_size=config.ollama.max_batch_size,
+                    max_retries=config.ollama.max_retries,
+                    request_timeout=config.ollama.request_timeout,
+                    prompt_template=config.ollama.prompt_template,
+                    prompt_template_id=config.ollama.prompt_template_id,
                 )
             )
 

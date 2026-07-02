@@ -71,66 +71,73 @@ def set(
     """
     Set a configuration value.
 
+    Accepts any field in the config, resolved by reflection over the dataclass
+    (so new fields work automatically and nothing silently no-ops). Use a dotted
+    key for nested sections; the value is coerced to the field's declared type.
+
     Example:
         subtitle-forge config set whisper.model large-v3
-        subtitle-forge config set ollama.model qwen2.5:32b
+        subtitle-forge config set whisper.use_whisperx false
+        subtitle-forge config set timestamp.linger_ms 250
+        subtitle-forge config set ollama.request_timeout 600
         subtitle-forge config set max_workers 4
     """
-    config = AppConfig.load()
+    import dataclasses
+    import typing
 
+    def _coerce(raw: str, annotation):
+        """Coerce a CLI string to the field's annotated type."""
+        low = raw.strip().lower()
+        base = annotation
+        args = typing.get_args(annotation)
+        if args:  # e.g. Optional[int] -> (int, NoneType)
+            if low in ("null", "none", ""):
+                return None
+            non_none = [a for a in args if a is not type(None)]
+            if non_none:
+                base = non_none[0]
+        if base is bool:
+            if low in ("true", "1", "yes", "on"):
+                return True
+            if low in ("false", "0", "no", "off"):
+                return False
+            raise ValueError(f"expected true/false, got {raw!r}")
+        if base is int:
+            return int(raw)
+        if base is float:
+            return float(raw)
+        return raw  # str, or unknown type -> leave as-is
+
+    config = AppConfig.load()
     parts = key.split(".")
-    if len(parts) == 1:
-        # Top-level setting
-        if key == "max_workers":
-            config.max_workers = int(value)
-        elif key == "log_level":
-            config.log_level = value
+
+    try:
+        if len(parts) == 1:
+            fields = {f.name: f for f in dataclasses.fields(config)}
+            fld = fields.get(key)
+            # Reject the nested-section names (whisper/ollama/...) — they need a
+            # dotted key like "whisper.model".
+            if fld is None or dataclasses.is_dataclass(getattr(config, key)):
+                print_error(f"Unknown setting: {key}")
+                raise typer.Exit(1)
+            setattr(config, key, _coerce(value, fld.type))
+        elif len(parts) == 2:
+            section_name, field_name = parts
+            section = getattr(config, section_name, None)
+            if section is None or not dataclasses.is_dataclass(section):
+                print_error(f"Unknown section: {section_name}")
+                raise typer.Exit(1)
+            fields = {f.name: f for f in dataclasses.fields(section)}
+            fld = fields.get(field_name)
+            if fld is None:
+                print_error(f"Unknown {section_name} setting: {field_name}")
+                raise typer.Exit(1)
+            setattr(section, field_name, _coerce(value, fld.type))
         else:
-            print_error(f"Unknown setting: {key}")
+            print_error(f"Invalid key format: {key}")
             raise typer.Exit(1)
-    elif len(parts) == 2:
-        section, setting = parts
-        if section == "whisper":
-            if setting == "model":
-                config.whisper.model = value
-            elif setting == "device":
-                config.whisper.device = value
-            elif setting == "compute_type":
-                config.whisper.compute_type = value
-            elif setting == "beam_size":
-                config.whisper.beam_size = int(value)
-            elif setting == "vad_filter":
-                config.whisper.vad_filter = value.lower() in ("true", "1", "yes")
-            else:
-                print_error(f"Unknown whisper setting: {setting}")
-                raise typer.Exit(1)
-        elif section == "ollama":
-            if setting == "model":
-                config.ollama.model = value
-            elif setting == "host":
-                config.ollama.host = value
-            elif setting == "temperature":
-                config.ollama.temperature = float(value)
-            elif setting == "max_batch_size":
-                config.ollama.max_batch_size = int(value)
-            else:
-                print_error(f"Unknown ollama setting: {setting}")
-                raise typer.Exit(1)
-        elif section == "output":
-            if setting == "encoding":
-                config.output.encoding = value
-            elif setting == "keep_original":
-                config.output.keep_original = value.lower() in ("true", "1", "yes")
-            elif setting == "bilingual":
-                config.output.bilingual = value.lower() in ("true", "1", "yes")
-            else:
-                print_error(f"Unknown output setting: {setting}")
-                raise typer.Exit(1)
-        else:
-            print_error(f"Unknown section: {section}")
-            raise typer.Exit(1)
-    else:
-        print_error(f"Invalid key format: {key}")
+    except (ValueError, TypeError) as e:
+        print_error(f"Invalid value for {key}: {e}")
         raise typer.Exit(1)
 
     config.save()

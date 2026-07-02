@@ -5,11 +5,6 @@ from typing import Optional
 
 import typer
 
-app = typer.Typer(no_args_is_help=True)
-
-
-@app.command("run")
-@app.command(hidden=True)  # Default command
 def transcribe_video(
     video: Path = typer.Argument(..., help="Video file path", exists=True),
     output: Optional[Path] = typer.Option(
@@ -195,30 +190,34 @@ def transcribe_video(
                 else None
             )
 
-            segments, info = transcriber.transcribe(
-                audio_path,
-                language=language,
-                beam_size=config.whisper.beam_size,
-                vad_filter=vad_filter,
-                batch_size=batch_size,
-                post_process=post_process and config.timestamp.enabled,
-                timestamp_config=timestamp_config,
-            )
-            tracker.update("Transcription complete")
+            try:
+                segments, info = transcriber.transcribe(
+                    audio_path,
+                    language=language,
+                    beam_size=config.whisper.beam_size,
+                    vad_filter=vad_filter,
+                    batch_size=batch_size,
+                    post_process=post_process and config.timestamp.enabled,
+                    timestamp_config=timestamp_config,
+                )
+                tracker.update("Transcription complete")
 
-            # 3. Save subtitles
-            tracker.set_description("Saving subtitles...")
+                # 3. Save subtitles
+                tracker.set_description("Saving subtitles...")
 
-            # Output path
-            if output is None:
-                output = video.with_suffix("").with_suffix(f".{info.language}.srt")
+                # Output path
+                if output is None:
+                    output = video.with_suffix("").with_suffix(f".{info.language}.srt")
 
-            processor = SubtitleProcessor()
-            processor.save(segments, output)
-            tracker.update("Save complete")
+                processor = SubtitleProcessor(encoding=config.output.encoding)
+                processor.save(segments, output)
+                tracker.update("Save complete")
+            finally:
+                # Always remove the extracted audio, even if transcription failed
+                # (previously this unlink sat after the transcribe() call with no
+                # finally, so a failure leaked a ~100MB/hour WAV in the temp dir).
+                audio_path.unlink(missing_ok=True)
 
-            # Cleanup
-            audio_path.unlink(missing_ok=True)
             transcriber.unload_model()
 
         print_success(

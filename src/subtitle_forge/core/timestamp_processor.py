@@ -170,6 +170,11 @@ class TimestampProcessor:
             segments = self._cap_overlong_displays(segments)
             segments = self._fix_overlaps(segments)
             segments = self._ensure_minimum_duration(segments)
+            # _ensure_minimum_duration extends short segments to start+min_duration
+            # WITHOUT looking at the next segment's start, which re-introduces the
+            # overlaps _fix_overlaps just resolved (common in fast dialogue). Re-run
+            # the gap pass afterwards — same backstop full mode already relies on.
+            segments = self._ensure_minimum_gap(segments)
             if audio_duration:
                 segments = self._clamp_to_duration(segments, audio_duration)
             return self._reindex(segments)
@@ -310,6 +315,15 @@ class TimestampProcessor:
                 # so we cap our end to leave a gap before that.
                 next_target_start = max(next_original_start - lead_in, new_start)
                 new_end = min(new_end, next_target_start - self.min_gap)
+
+            # Never pull the end in *before* the original acoustic offset. When a
+            # neighbour sits close, the clamp above could drop new_end below
+            # seg.end, truncating real speech (in "off" mode this produced
+            # sub-perceptible, even end-before-start subtitles). Instead the next
+            # segment's lead-in yields: its start is independently clamped to
+            # prev_end + min_gap on the following iteration, so keeping our own
+            # acoustic end here cannot create an overlap.
+            new_end = max(new_end, seg.end)
 
             # Clamp to audio duration if known
             if audio_duration and new_end > audio_duration:
@@ -648,25 +662,22 @@ class TimestampProcessor:
                 result.append(seg)
                 continue
 
-            # Distribute time proportionally across sentences
+            # Distribute time proportionally across sentences, strictly within
+            # [seg.start, seg.end]. (See _split_segment_proportionally: inflating
+            # each piece to min_duration overflowed the parent span and produced
+            # negative-duration last pieces. Readability floors are applied later
+            # by the min-duration / min-gap passes.)
             total_chars = sum(len(s) for s in sentences)
-            total_duration = seg.end - seg.start
+            total_duration = max(0.0, seg.end - seg.start)
             current_time = seg.start
+            n = len(sentences)
 
             for i, sentence in enumerate(sentences):
-                # Calculate duration based on character ratio
-                char_ratio = len(sentence) / total_chars if total_chars > 0 else 1.0 / len(sentences)
-                duration = total_duration * char_ratio
-
-                # Ensure minimum duration
-                duration = max(duration, self.min_duration)
-
-                # Calculate end time
-                end_time = current_time + duration
-
-                # Don't exceed original segment end for last sentence
-                if i == len(sentences) - 1:
-                    end_time = seg.end
+                char_ratio = len(sentence) / total_chars if total_chars > 0 else 1.0 / n
+                end_time = seg.end if i == n - 1 else current_time + total_duration * char_ratio
+                end_time = min(end_time, seg.end)
+                if end_time <= current_time:
+                    end_time = min(seg.end, current_time + 0.001)
 
                 result.append(
                     SubtitleSegment(
@@ -1001,36 +1012,36 @@ class TimestampProcessor:
     ) -> List[SubtitleSegment]:
         """
         Fallback: split segment proportionally when no word timestamps available.
+
+        Spans are distributed by character ratio and kept strictly within the
+        parent segment's [start, end]. We deliberately do NOT inflate each piece
+        to min_duration here: the old code did, which accumulated past seg.end
+        and then forced the last piece back to seg.end — producing subtitles that
+        ran far past the real segment and even negative-duration spans. Any
+        readability floor is applied later by _ensure_minimum_duration /
+        _ensure_minimum_gap, which respect neighbouring segments.
         """
         # Try to split by sentence endings
-        sentences = self._split_into_sentences(seg.text)
+        sentences = [s for s in self._split_into_sentences(seg.text) if s.strip()]
 
         if len(sentences) <= 1:
             return [seg]
 
-        # Distribute time proportionally across sentences
+        # Distribute time proportionally across sentences, bounded by seg.end.
         total_chars = sum(len(s) for s in sentences)
-        total_duration = seg.end - seg.start
+        total_duration = max(0.0, seg.end - seg.start)
         current_time = seg.start
-        result = []
+        result: List[SubtitleSegment] = []
+        n = len(sentences)
 
         for i, sentence in enumerate(sentences):
-            if not sentence.strip():
-                continue
-
-            # Calculate duration based on character ratio
-            char_ratio = len(sentence) / total_chars if total_chars > 0 else 1.0 / len(sentences)
-            duration = total_duration * char_ratio
-
-            # Ensure minimum duration
-            duration = max(duration, self.min_duration)
-
-            # Calculate end time
-            end_time = current_time + duration
-
-            # Don't exceed original segment end for last sentence
-            if i == len(sentences) - 1:
-                end_time = seg.end
+            char_ratio = len(sentence) / total_chars if total_chars > 0 else 1.0 / n
+            # Last piece lands exactly on seg.end; others accrue proportionally.
+            end_time = seg.end if i == n - 1 else current_time + total_duration * char_ratio
+            # Never exceed the parent end or run backwards.
+            end_time = min(end_time, seg.end)
+            if end_time <= current_time:
+                end_time = min(seg.end, current_time + 0.001)
 
             result.append(
                 SubtitleSegment(
@@ -1040,7 +1051,6 @@ class TimestampProcessor:
                     text=sentence.strip(),
                 )
             )
-
             current_time = end_time
 
         return result if result else [seg]
