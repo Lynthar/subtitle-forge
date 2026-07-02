@@ -2,6 +2,7 @@
 
 from pathlib import Path
 from typing import Optional
+import os
 import tempfile
 import logging
 
@@ -56,7 +57,11 @@ class AudioExtractor:
             )
 
         if output_path is None:
-            output_path = Path(tempfile.mktemp(suffix=f".{self.output_format}"))
+            # mkstemp (not the deprecated, TOCTOU-prone mktemp) reserves the name
+            # atomically; ffmpeg then overwrites the empty file it created.
+            fd, tmp_name = tempfile.mkstemp(suffix=f".{self.output_format}")
+            os.close(fd)
+            output_path = Path(tmp_name)
 
         logger.info(f"Extracting audio from {video_path.name}...")
 

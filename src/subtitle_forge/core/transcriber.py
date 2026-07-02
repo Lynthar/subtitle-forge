@@ -16,6 +16,7 @@ from pathlib import Path
 from typing import Optional, List, Tuple, Callable
 from dataclasses import dataclass
 import logging
+import threading
 
 from faster_whisper import WhisperModel, BatchedInferencePipeline
 
@@ -109,6 +110,8 @@ class Transcriber:
         "medium": 5000,
         "large-v2": 6000,
         "large-v3": 6000,
+        "large-v3-turbo": 3000,
+        "distil-large-v2": 4000,
         "distil-large-v3": 4000,
     }
 
@@ -163,6 +166,18 @@ class Transcriber:
         self._whisperx_model = None
         self._whisperx_align_model = None
         self._whisperx_metadata = None
+        # The align model is language-specific; remember which language the
+        # cached one was loaded for so we can reload when it changes.
+        self._whisperx_align_language: Optional[str] = None
+        # Warn only once per instance that VAD tuning doesn't apply under WhisperX.
+        self._whisperx_vad_warned = False
+        # Serializes transcription when one Transcriber is shared across threads
+        # (the `batch` command does this). Whisper/CTranslate2 inference and the
+        # lazy model loads are not safe to run concurrently on one instance, and
+        # concurrent GPU inference just thrashes VRAM — the same reason the server
+        # defaults to a single worker. Translation (a separate Ollama service)
+        # still runs in parallel across batch workers.
+        self._transcribe_lock = threading.Lock()
 
     @classmethod
     def select_optimal_model(cls, prefer_large: bool = True) -> str:
@@ -460,29 +475,32 @@ class Transcriber:
 
         logger.info(f"Starting transcription: {audio_path.name}")
 
-        # Use WhisperX if available and enabled
-        if self.use_whisperx:
-            return self._transcribe_whisperx(
+        # Serialize inference + lazy model loads across threads sharing this
+        # instance (see _transcribe_lock).
+        with self._transcribe_lock:
+            # Use WhisperX if available and enabled
+            if self.use_whisperx:
+                return self._transcribe_whisperx(
+                    audio_path=audio_path,
+                    language=language,
+                    beam_size=beam_size,
+                    vad_parameters=vad_parameters,
+                    post_process=post_process,
+                    timestamp_config=timestamp_config,
+                )
+
+            # Fall back to faster-whisper
+            return self._transcribe_faster_whisper(
                 audio_path=audio_path,
                 language=language,
                 beam_size=beam_size,
+                vad_filter=vad_filter,
+                word_timestamps=word_timestamps,
+                batch_size=batch_size,
                 vad_parameters=vad_parameters,
                 post_process=post_process,
                 timestamp_config=timestamp_config,
             )
-
-        # Fall back to faster-whisper
-        return self._transcribe_faster_whisper(
-            audio_path=audio_path,
-            language=language,
-            beam_size=beam_size,
-            vad_filter=vad_filter,
-            word_timestamps=word_timestamps,
-            batch_size=batch_size,
-            vad_parameters=vad_parameters,
-            post_process=post_process,
-            timestamp_config=timestamp_config,
-        )
 
     def _transcribe_whisperx(
         self,
@@ -499,6 +517,17 @@ class Transcriber:
 
         logger.debug("Using WhisperX for transcription with forced alignment")
 
+        # WhisperX uses pyannote-based VAD (vad_onset/vad_offset), so the
+        # silero-style speech_pad_ms / min_silence_duration_ms tuning does not
+        # translate. Warn once instead of silently discarding it.
+        if vad_parameters and not self._whisperx_vad_warned:
+            logger.warning(
+                "VAD tuning (speech_pad_ms / min_silence_duration_ms) is ignored "
+                "under WhisperX, which uses pyannote VAD. Run with --no-whisperx "
+                "to use faster-whisper if you need those parameters."
+            )
+            self._whisperx_vad_warned = True
+
         try:
             # Determine device
             device = self.device
@@ -506,15 +535,26 @@ class Transcriber:
                 device = "cpu"
                 logger.warning("CUDA not available, using CPU for WhisperX")
 
-            # Load WhisperX model
+            # Load WhisperX model. beam_size is a WhisperX ASR option (it lives in
+            # asr_options, not as a transcribe() kwarg); pass it through so the
+            # configured beam size isn't silently dropped. Guard against older
+            # WhisperX signatures that predate asr_options.
             if self._whisperx_model is None:
                 logger.debug(f"Loading WhisperX model: {self.model_name}")
-                self._whisperx_model = whisperx.load_model(
-                    self.model_name,
+                load_kwargs = dict(
                     device=device,
                     compute_type=self.compute_type,
                     download_root=self.download_root,
                 )
+                try:
+                    self._whisperx_model = whisperx.load_model(
+                        self.model_name,
+                        asr_options={"beam_size": beam_size},
+                        **load_kwargs,
+                    )
+                except TypeError:
+                    logger.debug("WhisperX load_model rejected asr_options; loading without it")
+                    self._whisperx_model = whisperx.load_model(self.model_name, **load_kwargs)
 
             # Load audio
             audio = whisperx.load_audio(str(audio_path))
@@ -543,12 +583,24 @@ class Transcriber:
             if self.whisperx_align and result.get("segments"):
                 logger.debug("Performing forced alignment with wav2vec2")
                 try:
-                    # Load alignment model
-                    if self._whisperx_align_model is None or self._whisperx_metadata is None:
+                    # Load alignment model. wav2vec2 align models are
+                    # language-specific (en/ja/zh are entirely different models),
+                    # so reload whenever the detected language changes. Without
+                    # this, a long-lived Transcriber (server TranscriberHolder or
+                    # the batch command) would align every subsequent language
+                    # with the FIRST job's model — producing wrong word-level
+                    # timestamps, or an alignment error that gets swallowed and
+                    # silently drops word timing.
+                    if (
+                        self._whisperx_align_model is None
+                        or self._whisperx_metadata is None
+                        or self._whisperx_align_language != detected_language
+                    ):
                         self._whisperx_align_model, self._whisperx_metadata = whisperx.load_align_model(
                             language_code=detected_language,
                             device=device,
                         )
+                        self._whisperx_align_language = detected_language
 
                     # Align
                     result = whisperx.align(
@@ -763,6 +815,7 @@ class Transcriber:
         self._whisperx_model = None
         self._whisperx_align_model = None
         self._whisperx_metadata = None
+        self._whisperx_align_language = None
 
         import gc
 

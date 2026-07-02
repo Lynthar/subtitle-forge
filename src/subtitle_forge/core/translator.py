@@ -192,6 +192,10 @@ Translated subtitles:"""
         # Anything 8B and below — clamp to 4.
         return min(cfg_max, 4)
 
+    def effective_batch_size(self) -> int:
+        """Public accessor for the model-clamped batch size (for progress UI)."""
+        return self._effective_batch_size()
+
     @property
     def model_manager(self) -> OllamaModelManager:
         """Get or create model manager instance."""
@@ -507,15 +511,20 @@ FOLLOWING DIALOGUE (for context, DO NOT translate):
 
     def _clean_translation(self, translated: str, original: str) -> str:
         """Clean up translation text."""
-        # Remove trailing punctuation duplicates
         translated = translated.strip()
 
         # If translation is suspiciously short compared to original, might be an error
         if len(translated) < 2 and len(original) > 10:
             return original
 
-        # Remove any remaining index markers at the start
-        translated = re.sub(r'^[\[\(]?\d+[\]\)]?\s*', '', translated)
+        # Strip a leftover index marker at the start — but ONLY the *bracketed*
+        # form ([5], (5)). The old pattern also matched bare digits, which
+        # silently corrupts any translation that legitimately begins with a
+        # number ("10時に…", "3 days later", "42号房间…"); a pure-number line
+        # ("42") was erased entirely. JSON mode never puts an index inside the
+        # value (the index is the key), so skip the strip there altogether.
+        if not self._is_json_mode():
+            translated = re.sub(r'^[\[\(]\d+[\]\)]\s*', '', translated)
 
         return translated.strip()
 
@@ -757,6 +766,14 @@ FOLLOWING DIALOGUE (for context, DO NOT translate):
         if source_lang == target_lang:
             logger.warning("Source and target languages are the same, skipping translation")
             return segments
+
+        # Reset failure tracking per call. One SubtitleTranslator is reused
+        # across every target language in a `process` run, and clear_failed_
+        # translations() was never called — so without this the second language's
+        # translation_failures.json (and the "N failed" warning) inherited the
+        # first language's records.
+        self.clear_failed_translations()
+        self._batch_failure_indices = {}
 
         batch_size = self._effective_batch_size()
         if batch_size != self.config.max_batch_size:

@@ -209,6 +209,18 @@ def run_setup_wizard() -> None:
         console.print("      Transcription will use CPU (slower but functional)")
         console.print("      Recommended translation model: [cyan]qwen2.5:7b[/cyan]")
 
+        # Persist CPU settings now. The config default is device=cuda, and on the
+        # base install (no WhisperX) faster-whisper has no CUDA auto-fallback — so
+        # without this the very first `process`/`transcribe` run would crash while
+        # loading the model on a non-existent CUDA device. int8 is the standard
+        # CPU compute type (float16 isn't supported on CPU).
+        cpu_config = AppConfig.load()
+        if cpu_config.whisper.device != "cpu":
+            cpu_config.whisper.device = "cpu"
+            cpu_config.whisper.compute_type = "int8"
+            cpu_config.save()
+            console.print("      [dim]Saved device=cpu, compute_type=int8 to config[/dim]")
+
     console.print()
 
     # Step 3: Check Whisper model (transcription)

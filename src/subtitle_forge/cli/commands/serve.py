@@ -2,11 +2,6 @@
 
 import typer
 
-app = typer.Typer(no_args_is_help=False)
-
-
-@app.command("run")
-@app.command(hidden=True)
 def serve(
     host: str = typer.Option("0.0.0.0", "--host", help="Bind address"),
     port: int = typer.Option(8765, "--port", "-p", help="Bind port"),

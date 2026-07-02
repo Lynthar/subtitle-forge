@@ -5,8 +5,6 @@ from typing import Optional, List
 
 import typer
 
-app = typer.Typer(no_args_is_help=True)
-
 VIDEO_EXTENSIONS = {".mp4", ".mkv", ".avi", ".mov", ".webm", ".flv", ".wmv", ".m4v"}
 
 
@@ -18,15 +16,17 @@ def find_videos(path: Path, recursive: bool = False) -> List[Path]:
         if path.suffix.lower() in VIDEO_EXTENSIONS:
             videos.append(path)
     elif path.is_dir():
-        pattern = "**/*" if recursive else "*"
-        for ext in VIDEO_EXTENSIONS:
-            videos.extend(path.glob(f"{pattern}{ext}"))
+        # Filter by lowercased suffix rather than globbing each extension: on
+        # case-sensitive filesystems (Linux) `path.glob("*.mp4")` misses ".MP4",
+        # so uppercase-extension files were silently skipped.
+        entries = path.rglob("*") if recursive else path.glob("*")
+        videos = [
+            p for p in entries if p.is_file() and p.suffix.lower() in VIDEO_EXTENSIONS
+        ]
 
     return sorted(videos)
 
 
-@app.command("run")
-@app.command(hidden=True)  # Default command
 def batch_process(
     path: Path = typer.Argument(..., help="Directory or video file path", exists=True),
     target_lang: List[str] = typer.Option(
@@ -161,6 +161,10 @@ def batch_process(
             host=config.ollama.host,
             temperature=config.ollama.temperature,
             max_batch_size=config.ollama.max_batch_size,
+            max_retries=config.ollama.max_retries,
+            request_timeout=config.ollama.request_timeout,
+            prompt_template=config.ollama.prompt_template,
+            prompt_template_id=config.ollama.prompt_template_id,
         )
     )
     subtitle_processor = SubtitleProcessor()
