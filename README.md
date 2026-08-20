@@ -245,7 +245,7 @@ And 90+ more languages supported by Whisper.
 
 ## Documentation
 
-For detailed installation instructions, GPU setup, troubleshooting, and configuration options, see the **[Usage Guide](GUIDE.md)**.
+For detailed installation instructions, GPU setup, troubleshooting, and configuration options, see the **[Usage Guide](docs/user-guide.md)**.
 
 ## Requirements
 
