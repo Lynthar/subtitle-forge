@@ -1,5 +1,7 @@
 # subtitle-forge
 
+**English** | [简体中文](README.zh-CN.md)
+
 Generate and translate video subtitles locally using AI — no cloud services required.
 
 ## Features
