@@ -56,6 +56,7 @@ class AudioExtractor:
                 f"Supported formats: {', '.join(self.SUPPORTED_VIDEO_FORMATS)}"
             )
 
+        created_scratch = output_path is None
         if output_path is None:
             # mkstemp (not the deprecated, TOCTOU-prone mktemp) reserves the name
             # atomically; ffmpeg then overwrites the empty file it created.
@@ -77,8 +78,15 @@ class AudioExtractor:
             ffmpeg.run(stream, overwrite_output=True, quiet=True)
 
         except ffmpeg.Error as e:
+            # Remove the pre-created scratch file: on failure the caller never
+            # learns its path, so nobody else can clean it up.
+            if created_scratch:
+                try:
+                    output_path.unlink(missing_ok=True)
+                except OSError:
+                    logger.warning(f"Could not remove scratch file {output_path}")
             error_msg = e.stderr.decode() if e.stderr else str(e)
-            raise AudioExtractionError(f"Audio extraction failed: {error_msg}")
+            raise AudioExtractionError(f"Audio extraction failed: {error_msg}") from e
 
         logger.info(f"Audio extracted: {output_path}")
         return output_path

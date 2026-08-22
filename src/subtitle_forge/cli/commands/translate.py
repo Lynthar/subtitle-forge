@@ -46,11 +46,19 @@ def translate_subtitle(
         subtitle-forge translate video.srt -s en -t zh --bilingual
     """
     from ...core.translator import SubtitleTranslator, TranslationConfig
-    from ...core.subtitle import SubtitleProcessor
-    from ...models.config import AppConfig
+    from ...core.subtitle import SubtitleProcessor, validate_language_codes
     from ...utils.progress import SubtitleProgress, print_success, print_error, print_info
+    from ..app import get_config
 
-    config = AppConfig.load()
+    # get_config() (not a bare AppConfig.load()) so the root --config flag
+    # actually reaches this command.
+    config = get_config()
+
+    try:
+        validate_language_codes([target_lang])
+    except ValueError as e:
+        print_error(str(e))
+        raise typer.Exit(1)
 
     # Try to detect source language from filename if not specified
     if source_lang is None:
@@ -67,6 +75,14 @@ def translate_subtitle(
             )
             raise typer.Exit(1)
 
+    # Translating a file into its own language is a no-op — and with the
+    # default output naming it would overwrite the input file with itself.
+    if target_lang == source_lang:
+        print_error(
+            f"Target language '{target_lang}' is the same as the source — nothing to translate."
+        )
+        raise typer.Exit(1)
+
     # Output path
     if output is None:
         stem = subtitle.stem
@@ -78,13 +94,17 @@ def translate_subtitle(
         else:
             output = subtitle.parent / f"{stem}.{target_lang}.srt"
 
+    if output.resolve() == subtitle.resolve():
+        print_error(f"Output path equals the input file ({subtitle}) — refusing to overwrite it.")
+        raise typer.Exit(1)
+
     progress = SubtitleProgress()
 
     try:
         with progress.track_video(subtitle.name, total_steps=2) as tracker:
             # 1. Load subtitles
             tracker.set_description("Loading subtitles...")
-            processor = SubtitleProcessor()
+            processor = SubtitleProcessor(encoding=config.output.encoding)
             segments = processor.load(subtitle)
             tracker.update("Subtitles loaded")
 
@@ -107,7 +127,9 @@ def translate_subtitle(
 
             # Save
             if bilingual:
-                merged = processor.merge_bilingual(segments, translated)
+                merged = processor.merge_bilingual(
+                    segments, translated, original_on_top=config.output.original_on_top
+                )
                 processor.save(merged, output)
             else:
                 processor.save(translated, output)

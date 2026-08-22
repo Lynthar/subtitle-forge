@@ -25,8 +25,16 @@
    - [translate - 仅翻译](#translate---仅翻译)
    - [config - 配置管理](#config---配置管理)
    - [quickstart - 初始化向导](#quickstart---初始化向导)
-4. [故障排查](#四故障排查)
-5. [附录](#五附录)
+4. [HTTP 服务模式](#四http-服务模式)
+   - [安装与启动](#安装与启动)
+   - [接口说明](#接口说明)
+   - [作为守护进程运行](#作为守护进程运行)
+   - [服务模式注意事项](#服务模式注意事项)
+5. [隐私与网络边界](#五隐私与网络边界)
+   - [四条边界](#四条边界)
+   - [完全离线部署](#完全离线部署)
+6. [故障排查](#六故障排查)
+7. [附录](#七附录)
    - [支持的语言](#支持的语言)
    - [时间戳后处理](#时间戳后处理)
    - [翻译提示词配置](#翻译提示词配置)
@@ -71,7 +79,7 @@ winget install ffmpeg         # winget
 ollama serve
 
 # 5. 安装 subtitle-forge（新终端）
-git clone https://github.com/your-repo/subtitle-forge.git
+git clone https://github.com/Lynthar/subtitle-forge.git
 cd subtitle-forge
 pip install -e .
 
@@ -90,7 +98,7 @@ brew services start ollama  # 后台服务
 # 或 ollama serve           # 前台运行
 
 # 安装 subtitle-forge
-git clone https://github.com/your-repo/subtitle-forge.git
+git clone https://github.com/Lynthar/subtitle-forge.git
 cd subtitle-forge
 pip install -e .
 subtitle-forge quickstart
@@ -108,7 +116,7 @@ curl -fsSL https://ollama.ai/install.sh | sh
 ollama serve  # 保持运行
 
 # 安装 subtitle-forge（推荐使用虚拟环境）
-git clone https://github.com/your-repo/subtitle-forge.git
+git clone https://github.com/Lynthar/subtitle-forge.git
 cd subtitle-forge
 python3 -m venv venv
 source venv/bin/activate
@@ -648,7 +656,253 @@ subtitle-forge quickstart
 
 ---
 
-# 四、故障排查
+# 四、HTTP 服务模式
+
+把 subtitle-forge 跑成一个 HTTP 服务，供媒体服务器（Jellyfin 等）或其他机器上的自动化脚本提交任务。
+不需要这类集成就不用看这一章——命令行已经够用。
+
+## 安装与启动
+
+```bash
+# 需要 serve 额外依赖（fastapi + uvicorn）
+pip install -e '.[serve]'
+
+# 生成一个长随机 token，客户端要用它做 Bearer 鉴权
+export SUBTITLE_FORGE_TOKEN="$(openssl rand -hex 32)"
+
+subtitle-forge serve --host 0.0.0.0 --port 8765
+```
+
+启动后访问 `http://<主机>:8765/docs` 是自动生成的 OpenAPI 交互文档。
+
+| 选项 | 默认值 | 说明 |
+|------|--------|------|
+| `--host` | `0.0.0.0` | 绑定地址 |
+| `--port` | `8765` | 绑定端口 |
+| `--workers` | `1` | 并发任务数，上限 4。**GPU 是瓶颈，没实测过就别调** |
+| `--no-auth` | 关 | 关闭鉴权。仅在绑定 `127.0.0.1` 的单用户机器上安全 |
+| `--log-level` | `info` | uvicorn 日志级别 |
+
+不加 `--no-auth` 而又没设 `$SUBTITLE_FORGE_TOKEN` 时，服务会拒绝启动；
+加了 `--no-auth` 又绑非回环地址时，会打印警告——**同网段任何人都能提交任务**。
+
+## 接口说明
+
+| 方法 | 路径 | 鉴权 | 用途 |
+|------|------|------|------|
+| `POST` | `/jobs` | Bearer | 提交字幕生成任务 |
+| `GET` | `/jobs/{id}` | Bearer | 查询任务状态 / 获取输出路径 |
+| `GET` | `/health` | 无 | 存活检查 + 队列统计 |
+
+`POST /jobs` 请求体：
+
+```json
+{
+  "video_path": "/服务端能看到的/绝对路径.mp4",
+  "target_languages": ["zh"],
+  "source_language": null,
+  "bilingual": false,
+  "keep_original": true
+}
+```
+
+提交时就会做校验，**不合规立刻返回错误，不会等到几分钟后 worker 跑起来才失败**：
+
+| 情况 | 响应 |
+|------|------|
+| 路径不是绝对路径 / 不存在 / 不是文件 | `400` |
+| 扩展名不在支持列表内（如误传 `.md`） | `400` |
+| 语言代码含路径分隔符等非法字符 | `422` |
+| `target_languages` 超过 10 个 | `422` |
+| 待处理队列已满（100 个 pending） | `503` |
+
+输出文件写在**源视频同目录**，命名规则与命令行一致：`<视频名>.<语言>.srt`，
+双语为 `<视频名>.<源语言>-<目标语言>.srt`。服务模式不支持指定输出目录。
+
+## 作为守护进程运行
+
+**macOS（launchd）**——存为 `~/Library/LaunchAgents/com.subtitle-forge.serve.plist`：
+
+```xml
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key><string>com.subtitle-forge.serve</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>/usr/local/bin/subtitle-forge</string>
+    <string>serve</string>
+    <string>--host</string><string>0.0.0.0</string>
+    <string>--port</string><string>8765</string>
+  </array>
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>SUBTITLE_FORGE_TOKEN</key><string>你的长随机-TOKEN</string>
+  </dict>
+  <key>RunAtLoad</key><true/>
+  <key>KeepAlive</key><true/>
+  <key>StandardOutPath</key><string>/tmp/subtitle-forge.log</string>
+  <key>StandardErrorPath</key><string>/tmp/subtitle-forge.err</string>
+</dict>
+</plist>
+```
+
+然后 `launchctl load ~/Library/LaunchAgents/com.subtitle-forge.serve.plist`。
+
+**Linux（systemd）**——存为 `/etc/systemd/system/subtitle-forge.service`：
+
+```ini
+[Unit]
+Description=subtitle-forge HTTP server
+After=network.target ollama.service
+
+[Service]
+Type=simple
+User=你的用户名
+Environment=SUBTITLE_FORGE_TOKEN=你的长随机-TOKEN
+ExecStart=/usr/local/bin/subtitle-forge serve --host 0.0.0.0 --port 8765
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
+```
+
+然后 `systemctl enable --now subtitle-forge`。
+
+## 服务模式注意事项
+
+- **模型必须提前缓存好**。服务端不会跑交互式下载。先在这台机器上执行一次
+  `subtitle-forge transcribe <任意视频>` 把 Whisper 权重下下来，再启动服务；
+  否则第一个任务会带着明确提示失败。
+- **Ollama 必须在跑**。翻译要调它，上线前用 `subtitle-forge config check --verbose` 确认。
+- **默认单 worker**。并发跑 Whisper 只会让显存互相踩踏，这也是默认值是 1 的原因。
+- **第一个任务慢（约 10–30 秒）**。Whisper 模型是首次请求时才加载的，之后常驻显存，后续任务立刻开始。
+- **任务只存在内存里**。重启服务会丢掉任务记录，正在跑的任务被标记为 `failed`（免得永远卡在 `processing`）。
+  需要重试就从客户端重新提交。这是有意为之——单用户场景上持久化不划算。
+- **停止服务杀不掉正在跑的任务**。Python 线程无法强制终止，正在转录的任务会一直占着 GPU
+  跑到自己结束或进程退出，期间**仍可能写出字幕文件**——哪怕它的状态已经是 `failed`。
+- **路径是严格的**。`video_path` 必须是绝对路径，而且要是**这台服务器**能看到的路径。
+  客户端和服务端挂载点不同时（例如 `/media/videos` 对 `/Volumes/nas-videos`），换算要在客户端做。
+
+---
+
+# 五、隐私与网络边界
+
+本项目的推理全部在本机完成：**转录和翻译过程不会把音频或字幕发到任何云服务**。
+但"本地优先"不等于"永不联网"，下面四条边界值得先看清楚，尤其是要处理敏感内容的时候。
+
+## 四条边界
+
+### 1. 首次获取模型需要联网
+
+| 模型 | 来源 | 默认缓存位置 |
+|------|------|--------------|
+| Whisper 语音识别 | HuggingFace（`huggingface.co`） | `~/.cache/huggingface/hub` |
+| Ollama 翻译模型 | Ollama 官方仓库 | `~/.ollama/models` |
+
+模型下载完成后，日常使用不再需要这两个来源。**但要注意**：huggingface_hub 即使在模型已缓存时，
+默认仍会发一次 HTTP 请求检查有没有新版本。要彻底切断，见下面的[完全离线部署](#完全离线部署)。
+
+中国大陆用户可用镜像替代官方源，见 [HuggingFace 镜像](#huggingface-镜像中国用户)。
+缓存位置可以用 `whisper.download_root` 配置项或 `HF_HOME` 环境变量改。
+
+### 2. Ollama 地址可以指向远程机器
+
+`ollama.host` 默认是 `http://localhost:11434`，此时翻译请求不出本机。
+但这个配置项接受任意地址：
+
+```bash
+# 一旦改成远程地址，字幕原文和译文都会发送到那台机器
+subtitle-forge config set ollama.host http://192.168.1.100:11434
+```
+
+把翻译放到局域网里的另一台强机上是合理用法，**但要清楚字幕内容离开了本机**。
+处理敏感内容前，用 `subtitle-forge config show` 确认这一项指向哪里。
+
+### 3. 调试日志会记录台词原文
+
+以下两个开关的产物**包含字幕内容**，默认都是关闭的：
+
+| 开关 | 产物 | 里面有什么 |
+|------|------|------------|
+| `--save-debug-log` | `<视频名>_debug/run.log` | DEBUG 级日志，含模型返回的译文片段（每次最多 500 字符） |
+| `--save-debug-log` | `<视频名>_debug/translation_failures.json` | 每条失败字幕的**原文全文**，以及模型响应的前 200 字符 |
+| `--save-failed-log` | `<视频名>_translation_failures.json` | 同上，但直接放在输出目录里，不建 `_debug/` 子目录 |
+
+产物都落在输出目录（默认是视频所在目录）。`transcribe` 命令不翻译，
+所以它的 `--save-debug-log` 只产出 `run.log`，没有失败报告。
+
+这些文件是排查问题最有用的东西，但**发给别人或贴到 issue 之前，先自己看一遍内容**。
+不加这两个开关时，日志里不会出现台词。
+
+### 4. 输出位置与文件权限
+
+- 命令行默认把字幕写在**源视频同目录**，`-o/--output-dir` 可以改。
+- 服务模式**恒定写在源视频同目录**，不支持指定别处。
+- 文件权限继承操作系统的默认设置（umask）。视频放在多用户共享目录里时，
+  生成的字幕对同一批人同样可见。
+
+### 附：关闭 HuggingFace 生态遥测
+
+HuggingFace 的库默认会收集一些使用数据。要全局关掉：
+
+```bash
+export HF_HUB_DISABLE_TELEMETRY=1
+# 或使用通用开关（对 HF 生态等同）
+export DO_NOT_TRACK=1
+```
+
+## 完全离线部署
+
+目标：让 subtitle-forge 在一台**完全不联网**的机器上跑起来。
+
+**第一步，在有网的机器上把模型下全**
+
+```bash
+# Whisper：跑一次转录即可触发下载（或直接用向导）
+subtitle-forge quickstart
+
+# Ollama：拉取配置里的翻译模型
+ollama pull qwen2.5:14b
+```
+
+**第二步，把两个缓存目录拷到离线机器的相同位置**
+
+```
+~/.cache/huggingface/hub     →  离线机器的 ~/.cache/huggingface/hub
+~/.ollama/models             →  离线机器的 ~/.ollama/models
+```
+
+如果配置了 `whisper.download_root`，拷这个目录而不是默认的 HF 缓存。
+
+**第三步，在离线机器上禁止一切外呼**
+
+```bash
+# 只用本地缓存；缓存里没有的文件直接报错，而不是尝试下载
+export HF_HUB_OFFLINE=1
+export HF_HUB_DISABLE_TELEMETRY=1
+```
+
+写进 `~/.zshrc` / `~/.bashrc` 可以永久生效。设了 `HF_HUB_OFFLINE=1` 之后，
+连"检查新版本"那次请求也会被跳过，顺带让模型加载更快一点。
+
+**第四步，验证**
+
+```bash
+subtitle-forge config check --verbose
+```
+
+Whisper 和 Ollama 两项都显示 ready，就说明离线环境是完整的。
+此时整条流水线（ffmpeg 抽音频 → 转录 → 翻译 → 写 SRT）不需要任何外部网络。
+
+> **注意**：`ollama.host` 必须是本机地址，否则第 2 条边界依然成立——
+> 离线机器上指向局域网另一台机器，字幕一样会离开这台电脑。
+
+---
+
+# 六、故障排查
 
 ## 无法连接 Ollama
 
@@ -870,7 +1124,7 @@ subtitle-forge config check --verbose
 
 ---
 
-# 五、附录
+# 七、附录
 
 ## 支持的语言
 

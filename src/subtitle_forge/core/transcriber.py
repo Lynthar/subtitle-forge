@@ -333,7 +333,7 @@ class Transcriber:
 
         except Exception as e:
             logger.error(f"Failed to download model: {e}")
-            raise TranscriptionError(f"Failed to download Whisper model: {e}")
+            raise TranscriptionError(f"Failed to download Whisper model: {e}") from e
 
     def ensure_model_downloaded(
         self,
@@ -370,7 +370,7 @@ class Transcriber:
                 download_root=self.download_root,
             )
         except Exception as e:
-            raise TranscriptionError(f"Failed to load model: {e}")
+            raise TranscriptionError(f"Failed to load model: {e}") from e
 
         logger.info("Model loaded successfully")
 
@@ -484,6 +484,7 @@ class Transcriber:
                     audio_path=audio_path,
                     language=language,
                     beam_size=beam_size,
+                    batch_size=batch_size,
                     vad_parameters=vad_parameters,
                     post_process=post_process,
                     timestamp_config=timestamp_config,
@@ -507,6 +508,7 @@ class Transcriber:
         audio_path: Path,
         language: Optional[str] = None,
         beam_size: int = 5,
+        batch_size: Optional[int] = None,
         vad_parameters: Optional[dict] = None,
         post_process: bool = True,
         timestamp_config: Optional[dict] = None,
@@ -529,11 +531,19 @@ class Transcriber:
             self._whisperx_vad_warned = True
 
         try:
-            # Determine device
+            # Determine device. When falling back to CPU the compute type must
+            # follow: CTranslate2 rejects float16 on CPU ("float16 computation
+            # is not supported"), so keeping the configured GPU compute type
+            # would make the fallback fail anyway.
             device = self.device
+            compute_type = self.compute_type
             if device == "cuda" and not torch.cuda.is_available():
                 device = "cpu"
-                logger.warning("CUDA not available, using CPU for WhisperX")
+                compute_type = get_optimal_compute_type("cpu")
+                logger.warning(
+                    "CUDA not available, using CPU for WhisperX "
+                    f"(compute_type={compute_type})"
+                )
 
             # Load WhisperX model. beam_size is a WhisperX ASR option (it lives in
             # asr_options, not as a transcribe() kwarg); pass it through so the
@@ -543,7 +553,7 @@ class Transcriber:
                 logger.debug(f"Loading WhisperX model: {self.model_name}")
                 load_kwargs = dict(
                     device=device,
-                    compute_type=self.compute_type,
+                    compute_type=compute_type,
                     download_root=self.download_root,
                 )
                 try:
@@ -562,12 +572,16 @@ class Transcriber:
             # Build kwargs for transcribe — WhisperX versions vary, so only
             # pass parameters that are supported. We try the rich call first
             # and fall back if older WhisperX rejects unknown kwargs.
-            transcribe_kwargs = {"language": language}
-            # batch_size 8 is WhisperX's documented sweet spot on a 24GB GPU.
+            # batch_size: honour config.whisper.batch_size when set — 8 (the
+            # WhisperX-documented sweet spot on a 24GB GPU) only as a default,
+            # since smaller cards need a smaller value to avoid OOM.
             # chunk_size 20s (vs default 30s) reduces the chance of slicing
             # through the middle of a long sentence.
-            transcribe_kwargs["batch_size"] = 8
-            transcribe_kwargs["chunk_size"] = 20
+            transcribe_kwargs: dict = {
+                "language": language,
+                "batch_size": batch_size if batch_size else 8,
+                "chunk_size": 20,
+            }
 
             try:
                 result = self._whisperx_model.transcribe(audio, **transcribe_kwargs)
@@ -672,7 +686,7 @@ class Transcriber:
 
         except Exception as e:
             logger.error(f"WhisperX transcription failed: {e}")
-            raise TranscriptionError(f"WhisperX transcription failed: {e}")
+            raise TranscriptionError(f"WhisperX transcription failed: {e}") from e
 
     def _transcribe_faster_whisper(
         self,
@@ -777,7 +791,7 @@ class Transcriber:
             return segments, transcription_info
 
         except Exception as e:
-            raise TranscriptionError(f"Transcription failed: {e}")
+            raise TranscriptionError(f"Transcription failed: {e}") from e
 
     def _apply_post_processing(
         self,

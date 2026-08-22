@@ -6,6 +6,7 @@ with a digit lost it (and a pure-number line was erased entirely).
 """
 
 from subtitle_forge.core.translator import SubtitleTranslator, TranslationConfig
+from subtitle_forge.models.subtitle import SubtitleSegment
 
 
 def _json_mode_translator():
@@ -44,3 +45,20 @@ def test_legacy_mode_preserves_leading_bare_numbers():
 def test_short_translation_falls_back_to_original():
     t = _legacy_mode_translator()
     assert t._clean_translation("x", "a long original sentence") == "a long original sentence"
+
+
+def test_positional_fallback_preserves_bare_leading_numbers():
+    # Legacy mode, model answered with a bare line (no [N] marker): the
+    # positional fallback's inline cleanup must not eat a legitimate leading
+    # number — the same corruption class _clean_translation was fixed for.
+    t = _legacy_mode_translator()
+    seg = SubtitleSegment(index=7, start=0.0, end=1.0, text="三日後")
+    out = t._parse_translation_response("3 days later", [seg])
+    assert out[0].text == "3 days later"
+
+
+def test_positional_fallback_still_strips_real_index_markers():
+    t = _legacy_mode_translator()
+    seg = SubtitleSegment(index=7, start=0.0, end=1.0, text="hello")
+    out = t._parse_translation_response("7. bonjour", [seg])
+    assert out[0].text == "bonjour"

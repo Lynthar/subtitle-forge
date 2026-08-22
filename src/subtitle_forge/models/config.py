@@ -1,5 +1,7 @@
 """Configuration data model."""
 
+import os
+import sys
 from pathlib import Path
 from dataclasses import dataclass, field, asdict
 from typing import Optional
@@ -93,7 +95,15 @@ class AppConfig:
 
     @classmethod
     def get_config_path(cls) -> Path:
-        """Get user config file path."""
+        """Get user config file path.
+
+        Windows uses the %APPDATA% location the user guide documents;
+        everything else uses ~/.config.
+        """
+        if sys.platform == "win32":
+            appdata = os.environ.get("APPDATA")
+            if appdata:
+                return Path(appdata) / "subtitle-forge" / "config.yaml"
         return Path.home() / ".config" / "subtitle-forge" / "config.yaml"
 
     @classmethod
@@ -139,52 +149,3 @@ class AppConfig:
             yaml.safe_dump(
                 data, f, default_flow_style=False, allow_unicode=True, sort_keys=False
             )
-
-    def to_dict(self) -> dict:
-        """Convert config to dictionary."""
-        ollama_dict = {
-            "model": self.ollama.model,
-            "host": self.ollama.host,
-            "temperature": self.ollama.temperature,
-            "max_batch_size": self.ollama.max_batch_size,
-        }
-        if self.ollama.prompt_template:
-            ollama_dict["prompt_template"] = self.ollama.prompt_template
-        if self.ollama.prompt_template_id:
-            ollama_dict["prompt_template_id"] = self.ollama.prompt_template_id
-
-        return {
-            "whisper": {
-                "model": self.whisper.model,
-                "device": self.whisper.device,
-                "compute_type": self.whisper.compute_type,
-                "beam_size": self.whisper.beam_size,
-                "vad_filter": self.whisper.vad_filter,
-                "speech_pad_ms": self.whisper.speech_pad_ms,
-                "min_silence_duration_ms": self.whisper.min_silence_duration_ms,
-                "use_whisperx": self.whisper.use_whisperx,
-                "whisperx_align": self.whisper.whisperx_align,
-            },
-            "ollama": ollama_dict,
-            "output": {
-                "encoding": self.output.encoding,
-                "keep_original": self.output.keep_original,
-                "bilingual": self.output.bilingual,
-            },
-            "timestamp": {
-                "enabled": self.timestamp.enabled,
-                "mode": self.timestamp.mode,
-                "min_duration": self.timestamp.min_duration,
-                "max_duration": self.timestamp.max_duration,
-                "min_gap": self.timestamp.min_gap,
-                "max_gap_warning": self.timestamp.max_gap_warning,
-                "chars_per_second": self.timestamp.chars_per_second,
-                "cjk_chars_per_second": self.timestamp.cjk_chars_per_second,
-                "split_threshold": self.timestamp.split_threshold,
-                "split_sentences": self.timestamp.split_sentences,
-                "lead_in_ms": self.timestamp.lead_in_ms,
-                "linger_ms": self.timestamp.linger_ms,
-            },
-            "max_workers": self.max_workers,
-            "log_level": self.log_level,
-        }

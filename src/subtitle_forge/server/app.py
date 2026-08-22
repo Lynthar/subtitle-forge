@@ -27,6 +27,7 @@ def create_app(
     *,
     max_workers: int = 1,
     require_auth: bool = True,
+    max_pending: int = 100,
 ) -> FastAPI:
     config = config or AppConfig.load()
     holder = TranscriberHolder(config)
@@ -72,6 +73,17 @@ def create_app(
         err = validate_video_path(payload.video_path)
         if err:
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=err)
+
+        # Backpressure: pending jobs previously had no bound at all (the
+        # store's max_jobs only evicts *terminal* jobs). Approximate check —
+        # concurrent submits can slightly overshoot, which is fine for a cap
+        # whose job is to stop runaway queues, not to account precisely.
+        stats = await store.stats()
+        if stats["pending"] >= max_pending:
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail=f"Job queue is full ({max_pending} pending); retry later",
+            )
 
         job = Job(
             job_id=new_job_id(),

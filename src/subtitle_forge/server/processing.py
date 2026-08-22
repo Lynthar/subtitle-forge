@@ -49,6 +49,7 @@ class TranscriberHolder:
                 model_name=cfg.model,
                 device=cfg.device,
                 compute_type=cfg.compute_type,
+                download_root=cfg.download_root,
                 use_whisperx=cfg.use_whisperx,
                 whisperx_align=cfg.whisperx_align,
                 hf_token=cfg.hf_token,
