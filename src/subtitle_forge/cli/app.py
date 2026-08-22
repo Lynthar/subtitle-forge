@@ -34,14 +34,24 @@ app.add_typer(config.app, name="config", help="Configuration management")
 
 # Global config
 _config: Optional[AppConfig] = None
+# Path passed via the root --config flag; None = the default location. The
+# config subcommands need the PATH (not just the loaded object) so that
+# `--config custom.yaml config set ...` reads AND writes custom.yaml instead
+# of reading it and then saving to the default path.
+_config_path: Optional[Path] = None
 
 
 def get_config() -> AppConfig:
     """Get current configuration."""
     global _config
     if _config is None:
-        _config = AppConfig.load()
+        _config = AppConfig.load(_config_path)
     return _config
+
+
+def get_config_path() -> Optional[Path]:
+    """The --config override from the root callback (None = default path)."""
+    return _config_path
 
 
 @app.callback()
@@ -77,10 +87,11 @@ def main(
     ),
 ):
     """subtitle-forge - Local video subtitle generation and translation tool"""
-    global _config
+    global _config, _config_path
 
     # Load configuration
     if config_file:
+        _config_path = config_file
         _config = AppConfig.load(config_file)
     else:
         _config = get_config()
@@ -88,6 +99,11 @@ def main(
     # Setup logging
     log_level = "DEBUG" if verbose else ("ERROR" if quiet else _config.log_level)
     setup_logging(log_level, str(log_file) if log_file else _config.log_file)
+
+    # Wire --quiet / --no-progress into the Rich helpers — before this they
+    # were parsed but had no effect on panels or progress bars.
+    from ..utils.progress import set_ui_options
+    set_ui_options(quiet=quiet, no_progress=no_progress)
 
     # Store in context
     ctx.ensure_object(dict)
@@ -213,6 +229,7 @@ def process(
         print_info,
         print_warning,
         print_translation_explainer,
+        progress_disabled,
     )
 
     cfg = get_config()
@@ -274,6 +291,7 @@ def process(
             model_name=cfg.whisper.model,
             device=cfg.whisper.device,
             compute_type=cfg.whisper.compute_type,
+            download_root=cfg.whisper.download_root,
             use_whisperx=whisperx_enabled,
             whisperx_align=cfg.whisper.whisperx_align,
             hf_token=cfg.whisper.hf_token,
@@ -309,6 +327,7 @@ def process(
                     TextColumn("[progress.percentage]{task.percentage:>3.1f}%"),
                     DownloadColumn(),
                     console=console,
+                    disable=progress_disabled(),
                 ) as dl_progress:
                     dl_task = dl_progress.add_task("Downloading...", total=transcriber.get_model_size())
                     last_completed = 0
@@ -369,6 +388,7 @@ def process(
                     TextColumn("[progress.percentage]{task.percentage:>3.1f}%"),
                     DownloadColumn(),
                     console=console,
+                    disable=progress_disabled(),
                 ) as dl_progress:
                     dl_task = dl_progress.add_task("Downloading...", total=None)
 

@@ -102,6 +102,12 @@ class JobRunner:
         logger.info("JobRunner started with %d worker(s)", self._max_workers)
 
     async def stop(self) -> None:
+        # Cancelling a worker task does NOT stop a job already running inside
+        # run_in_executor — Python threads can't be killed, so an in-flight
+        # transcription keeps the GPU busy until it finishes or the process
+        # exits, and may still write output files after its job was marked
+        # failed (see the CancelledError handler in _worker). We only cancel
+        # the awaiting coroutines here.
         if not self._running:
             return
         self._running = False
@@ -173,4 +179,12 @@ def validate_video_path(path: str) -> Optional[str]:
         return f"video_path does not exist on this server: {path}"
     if not p.is_file():
         return f"video_path is not a file: {path}"
+    # Reject non-video files here too — otherwise a README.md is accepted with
+    # 202 and only fails minutes later when the worker reaches ffmpeg.
+    from ..core.audio import AudioExtractor
+
+    suffix = p.suffix.lower()
+    if suffix not in AudioExtractor.SUPPORTED_VIDEO_FORMATS:
+        supported = ", ".join(sorted(AudioExtractor.SUPPORTED_VIDEO_FORMATS))
+        return f"unsupported video format {suffix or '(none)'}; supported: {supported}"
     return None

@@ -21,7 +21,7 @@ from typing import Callable, ContextManager, List, Optional
 
 from ..models.config import AppConfig
 from .audio import AudioExtractor
-from .subtitle import SubtitleProcessor
+from .subtitle import SubtitleProcessor, validate_language_codes
 from .transcriber import Transcriber
 from .translator import SubtitleTranslator
 
@@ -177,11 +177,18 @@ def run_pipeline(
     subtitle_processor = SubtitleProcessor(encoding=config.output.encoding)
     stem = video_path.stem
 
-    audio_path = extractor.extract(video_path)
-    if hooks.on_audio_extracted is not None:
-        hooks.on_audio_extracted(audio_path)
+    # Language codes become output filenames verbatim ({stem}.{lang}.srt) —
+    # reject path-metacharacter "languages" before any expensive work. This is
+    # the choke point for both entry points (server request langs included).
+    validate_language_codes(target_languages)
+    if source_language:
+        validate_language_codes([source_language])
 
+    audio_path = extractor.extract(video_path)
     try:
+        if hooks.on_audio_extracted is not None:
+            hooks.on_audio_extracted(audio_path)
+
         timestamp_config = build_timestamp_config(
             config,
             mode_override=timestamp_mode,

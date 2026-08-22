@@ -1,9 +1,10 @@
 """Subtitle processing module for SRT file handling."""
 
 from pathlib import Path
-from typing import List, Optional
+from typing import Iterable, List, Optional
 from datetime import timedelta
 import logging
+import re
 
 import pysrt
 
@@ -11,6 +12,27 @@ from ..models.subtitle import SubtitleSegment
 from ..exceptions import SubtitleError
 
 logger = logging.getLogger(__name__)
+
+# Unicode letters/digits, hyphen, underscore, space (not leading). Covers en,
+# zh, zh-TW, yue, pt-BR and loose labels, while excluding every path
+# metacharacter (/ \ . : and a leading dot).
+_LANGUAGE_TOKEN_RE = re.compile(r"^\w[\w -]{0,31}$")
+
+
+def validate_language_codes(languages: Iterable[str]) -> None:
+    """Reject language tokens that are not safe to embed in a filename.
+
+    Language codes go into output paths verbatim ({stem}.{lang}.srt), so a
+    crafted "language" like ``../../x`` from an API caller (or a typo'd CLI
+    flag) would write .srt files outside the output directory. Raises
+    ValueError on the first offending token.
+    """
+    for lang in languages:
+        if not lang or not _LANGUAGE_TOKEN_RE.fullmatch(lang):
+            raise ValueError(
+                f"Invalid language code {lang!r}: use letters/digits/hyphen, "
+                "e.g. en, zh, zh-TW, yue"
+            )
 
 
 class SubtitleProcessor:

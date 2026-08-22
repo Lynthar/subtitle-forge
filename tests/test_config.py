@@ -47,3 +47,40 @@ def test_defaults_round_trip(tmp_path):
     loaded = AppConfig.load(path)
     assert loaded.whisper.model == AppConfig().whisper.model
     assert loaded.timestamp.mode == "minimal"
+
+
+def test_default_yaml_matches_code_defaults():
+    # config/default.yaml is the documented reference copy of the defaults —
+    # it is NOT loaded at runtime — so this test is what keeps it from
+    # silently drifting away from the dataclass defaults it documents.
+    import dataclasses
+    from pathlib import Path
+
+    import yaml
+
+    repo_root = Path(__file__).resolve().parent.parent
+    with open(repo_root / "config" / "default.yaml", encoding="utf-8") as f:
+        documented = yaml.safe_load(f)
+    code_defaults = dataclasses.asdict(AppConfig())
+
+    def check(doc: dict, code: dict, prefix: str = "") -> None:
+        for key, value in doc.items():
+            assert key in code, f"{prefix}{key} is documented but not an AppConfig field"
+            if isinstance(value, dict):
+                check(value, code[key], prefix=f"{prefix}{key}.")
+            else:
+                assert code[key] == value, (
+                    f"{prefix}{key}: default.yaml documents {value!r}, "
+                    f"code default is {code[key]!r}"
+                )
+
+    check(documented, code_defaults)
+
+
+def test_config_path_uses_appdata_on_windows(monkeypatch):
+    import sys
+    from pathlib import Path
+
+    monkeypatch.setattr(sys, "platform", "win32")
+    monkeypatch.setenv("APPDATA", str(Path("/fake/appdata")))
+    assert AppConfig.get_config_path() == Path("/fake/appdata") / "subtitle-forge" / "config.yaml"

@@ -75,16 +75,24 @@ def transcribe_video(
         subtitle-forge transcribe video.mp4 --language en --model large-v3
     """
     from ...core.audio import AudioExtractor
-    from ...core.pipeline import build_timestamp_config
+    from ...core.pipeline import build_timestamp_config, build_vad_parameters
     from ...core.transcriber import Transcriber
     from ...core.subtitle import SubtitleProcessor
-    from ...models.config import AppConfig
-    from ...utils.progress import SubtitleProgress, print_success, print_error, print_info
+    from ...utils.progress import (
+        SubtitleProgress,
+        print_success,
+        print_error,
+        print_info,
+        progress_disabled,
+    )
     from ...utils.logger import setup_logging
+    from ..app import get_config
 
     from rich.console import Console
 
-    config = AppConfig.load()
+    # get_config() (not a bare AppConfig.load()) so the root --config flag
+    # actually reaches this command.
+    config = get_config()
     progress = SubtitleProgress()
     console = Console()
 
@@ -94,7 +102,9 @@ def transcribe_video(
         debug_dir = output_dir / f"{video.stem}_debug"
         debug_dir.mkdir(exist_ok=True)
         debug_log_path = str(debug_dir / "run.log")
-        setup_logging("DEBUG", debug_log_path)
+        # console_level="INFO" keeps third-party DEBUG stack traces out of the
+        # terminal while the file still captures everything (same as process).
+        setup_logging("DEBUG", debug_log_path, console_level="INFO")
 
     # Model selection
     if auto_model:
@@ -113,6 +123,7 @@ def transcribe_video(
             model_name=model_name,
             device=config.whisper.device,
             compute_type=config.whisper.compute_type,
+            download_root=config.whisper.download_root,
             use_whisperx=whisperx_enabled,
             whisperx_align=config.whisper.whisperx_align,
             hf_token=config.whisper.hf_token,
@@ -148,6 +159,7 @@ def transcribe_video(
                     TextColumn("[progress.percentage]{task.percentage:>3.1f}%"),
                     DownloadColumn(),
                     console=console,
+                    disable=progress_disabled(),
                 ) as dl_progress:
                     dl_task = dl_progress.add_task("Downloading...", total=transcriber.get_model_size())
                     last_completed = 0
@@ -196,7 +208,8 @@ def transcribe_video(
                     language=language,
                     beam_size=config.whisper.beam_size,
                     vad_filter=vad_filter,
-                    batch_size=batch_size,
+                    batch_size=batch_size if batch_size is not None else config.whisper.batch_size,
+                    vad_parameters=build_vad_parameters(config),
                     post_process=post_process and config.timestamp.enabled,
                     timestamp_config=timestamp_config,
                 )
@@ -205,9 +218,11 @@ def transcribe_video(
                 # 3. Save subtitles
                 tracker.set_description("Saving subtitles...")
 
-                # Output path
+                # Output path. Build from the stem so a multi-dot name keeps
+                # its inner parts — chained with_suffix() treated ".final" in
+                # "movie.final.mp4" as a suffix and produced "movie.en.srt".
                 if output is None:
-                    output = video.with_suffix("").with_suffix(f".{info.language}.srt")
+                    output = video.parent / f"{video.stem}.{info.language}.srt"
 
                 processor = SubtitleProcessor(encoding=config.output.encoding)
                 processor.save(segments, output)

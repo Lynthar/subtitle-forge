@@ -10,57 +10,71 @@ from rich.panel import Panel
 
 from ...models.config import AppConfig
 from ...utils.gpu import get_gpu_info, check_cuda_available
-from ...utils.progress import print_success, print_error, print_info, print_warning
+from ...utils.progress import (
+    print_success,
+    print_error,
+    print_info,
+    progress_disabled,
+)
 
 app = typer.Typer(no_args_is_help=True)
 console = Console()
 
 
+def _active_config_path() -> Optional[Path]:
+    """The --config override from the root callback, if any (None = default).
+
+    Deferred import: cli.app imports this module at startup, so a top-level
+    import would be circular.
+    """
+    from ..app import get_config_path
+
+    return get_config_path()
+
+
+def _load_config() -> AppConfig:
+    """Load the active config, honouring the root --config flag."""
+    return AppConfig.load(_active_config_path())
+
+
+def _config_file_display() -> Path:
+    return _active_config_path() or AppConfig.get_config_path()
+
+
 @app.command()
 def show():
-    """Show current configuration."""
-    config = AppConfig.load()
+    """Show current configuration (every field, including nested sections)."""
+    import dataclasses
+
+    config = _load_config()
+
+    def _display(value) -> str:
+        if value is None:
+            return "[dim]null[/dim]"
+        text = str(value)
+        if len(text) > 60:
+            text = text[:57] + "..."
+        return text
 
     table = Table(title="Current Configuration")
     table.add_column("Setting", style="cyan")
     table.add_column("Value", style="green")
 
-    # Whisper settings
-    table.add_row("[bold]Whisper[/bold]", "")
-    table.add_row("  Model", config.whisper.model)
-    table.add_row("  Device", config.whisper.device)
-    table.add_row("  Compute Type", config.whisper.compute_type)
-    table.add_row("  Beam Size", str(config.whisper.beam_size))
-    table.add_row("  VAD Filter", str(config.whisper.vad_filter))
-
-    # Ollama settings
-    table.add_row("[bold]Ollama[/bold]", "")
-    table.add_row("  Model", config.ollama.model)
-    table.add_row("  Host", config.ollama.host)
-    table.add_row("  Temperature", str(config.ollama.temperature))
-    table.add_row("  Max Batch Size", str(config.ollama.max_batch_size))
-    # Show prompt source (custom > library > default)
-    if config.ollama.prompt_template:
-        prompt_info = "[cyan]Custom[/cyan]"
-    elif config.ollama.prompt_template_id:
-        prompt_info = f"[cyan]Library: {config.ollama.prompt_template_id}[/cyan]"
-    else:
-        prompt_info = "[dim]Default[/dim]"
-    table.add_row("  Prompt", prompt_info)
-
-    # Output settings
-    table.add_row("[bold]Output[/bold]", "")
-    table.add_row("  Encoding", config.output.encoding)
-    table.add_row("  Keep Original", str(config.output.keep_original))
-    table.add_row("  Bilingual", str(config.output.bilingual))
-
-    # General settings
-    table.add_row("[bold]General[/bold]", "")
-    table.add_row("  Max Workers", str(config.max_workers))
-    table.add_row("  Log Level", config.log_level)
+    # Reflect over the dataclasses so every field shows up (and new fields
+    # appear automatically) — the previous hand-maintained table silently
+    # omitted whole sections (timestamp.*) and fields (ollama.request_timeout,
+    # whisper.batch_size, ...): exactly the values `config set` writes.
+    for section_field in dataclasses.fields(config):
+        value = getattr(config, section_field.name)
+        if dataclasses.is_dataclass(value):
+            table.add_row(f"[bold]{section_field.name}[/bold]", "")
+            for f in dataclasses.fields(value):
+                table.add_row(f"  {f.name}", _display(getattr(value, f.name)))
+        else:
+            table.add_row(section_field.name, _display(value))
 
     console.print(table)
-    console.print(f"\nConfig file: {AppConfig.get_config_path()}")
+    console.print(f"\nConfig file: {_config_file_display()}")
 
 
 @app.command()
@@ -108,7 +122,7 @@ def set(
             return float(raw)
         return raw  # str, or unknown type -> leave as-is
 
-    config = AppConfig.load()
+    config = _load_config()
     parts = key.split(".")
 
     try:
@@ -140,7 +154,7 @@ def set(
         print_error(f"Invalid value for {key}: {e}")
         raise typer.Exit(1)
 
-    config.save()
+    config.save(_active_config_path())
     print_success(f"Set {key} = {value}")
 
 
@@ -148,7 +162,7 @@ def set(
 def reset():
     """Reset configuration to defaults."""
     config = AppConfig()
-    config.save()
+    config.save(_active_config_path())
     print_success("Configuration reset to defaults")
 
 
@@ -173,7 +187,7 @@ def check(
     console.print(Panel("System Diagnostics", style="bold blue"))
 
     issues = []
-    config = AppConfig.load()
+    config = _load_config()
 
     # Check CUDA
     console.print("\n[bold]GPU Status:[/bold]")
@@ -193,7 +207,17 @@ def check(
                 pass
     else:
         console.print("  [yellow]CUDA:[/yellow] Not available")
-        console.print("    Transcription will use CPU (slower)")
+        if config.whisper.device == "cuda":
+            # Don't just say "will use CPU" — with plain faster-whisper a cuda
+            # device setting fails to load the model outright (only the
+            # WhisperX path falls back). Make the mismatch actionable.
+            console.print(
+                "    [red]Config mismatch:[/red] whisper.device is 'cuda' but CUDA is not available"
+            )
+            console.print("    Fix with: subtitle-forge config set whisper.device cpu")
+            issues.append("whisper.device=cuda but CUDA is not available")
+        else:
+            console.print("    Transcription will use CPU (slower)")
 
         if verbose:
             console.print("    [dim]To enable GPU acceleration, install CUDA and PyTorch with CUDA support[/dim]")
@@ -262,14 +286,17 @@ def check(
         console.print(f"  Whisper Device: {config.whisper.device}")
         console.print(f"  Ollama Model: {config.ollama.model}")
         console.print(f"  Max Workers: {config.max_workers}")
-        console.print(f"  Config Path: {AppConfig.get_config_path()}")
+        console.print(f"  Config Path: {_config_file_display()}")
 
     # Check Whisper model
     console.print("\n[bold]Whisper Status:[/bold]")
     try:
         from ...core.transcriber import Transcriber
 
-        transcriber = Transcriber(model_name=config.whisper.model)
+        transcriber = Transcriber(
+            model_name=config.whisper.model,
+            download_root=config.whisper.download_root,
+        )
         if transcriber.is_model_cached():
             console.print(f"  [green]Model:[/green] {config.whisper.model} (ready)")
         else:
@@ -321,7 +348,7 @@ def export(
     ),
 ):
     """Export configuration to file."""
-    config = AppConfig.load()
+    config = _load_config()
     config.save(output)
     print_success(f"Configuration exported to: {output}")
 
@@ -332,7 +359,7 @@ def import_config(
 ):
     """Import configuration from file."""
     config = AppConfig.load(input_file)
-    config.save()
+    config.save(_active_config_path())
     print_success(f"Configuration imported from: {input_file}")
 
 
@@ -359,7 +386,7 @@ def pull_model(
 
     from ...core.model_manager import OllamaModelManager, format_bytes
 
-    config = AppConfig.load()
+    config = _load_config()
     target_model = model or config.ollama.model
 
     console.print(Panel(
@@ -394,6 +421,7 @@ def pull_model(
             TextColumn("[progress.percentage]{task.percentage:>3.1f}%"),
             DownloadColumn(),
             console=console,
+            disable=progress_disabled(),
         ) as progress:
             task = progress.add_task("Initializing...", total=None)
 
@@ -434,7 +462,7 @@ def show_prompt():
     """
     from ...core.translator import SubtitleTranslator
 
-    config = AppConfig.load()
+    config = _load_config()
 
     if config.ollama.prompt_template:
         console.print(Panel(
@@ -503,9 +531,9 @@ def set_prompt(
         raise typer.Exit(1)
 
     # Save to config
-    config = AppConfig.load()
+    config = _load_config()
     config.ollama.prompt_template = prompt_content
-    config.save()
+    config.save(_active_config_path())
 
     print_success(f"Custom prompt loaded from: {file}")
     console.print(f"\n[dim]Prompt length: {len(prompt_content)} characters[/dim]")
@@ -521,11 +549,11 @@ def reset_prompt():
     Example:
         subtitle-forge config reset-prompt
     """
-    config = AppConfig.load()
+    config = _load_config()
 
     if config.ollama.prompt_template:
         config.ollama.prompt_template = None
-        config.save()
+        config.save(_active_config_path())
         print_success("Translation prompt reset to default")
     else:
         print_info("Already using default prompt")
@@ -550,7 +578,7 @@ def export_prompt(
     """
     from ...core.translator import SubtitleTranslator
 
-    config = AppConfig.load()
+    config = _load_config()
     prompt = config.ollama.prompt_template or SubtitleTranslator.DEFAULT_PROMPT_TEMPLATE
 
     try:
@@ -672,11 +700,11 @@ def use_prompt(
         console.print("\n[dim]Use 'config list-prompts' to see available templates[/dim]")
         raise typer.Exit(1)
 
-    config = AppConfig.load()
+    config = _load_config()
     # Clear custom prompt if set, use library template
     config.ollama.prompt_template = None
     config.ollama.prompt_template_id = template_id
-    config.save()
+    config.save(_active_config_path())
 
     print_success(f"Now using prompt template: {template.name}")
     console.print(f"[dim]Description: {template.description}[/dim]")
@@ -803,10 +831,10 @@ def delete_prompt(
         print_success(f"Template deleted: {template_id}")
 
         # Clear from config if it was the active template
-        config = AppConfig.load()
+        config = _load_config()
         if config.ollama.prompt_template_id == template_id:
             config.ollama.prompt_template_id = None
-            config.save()
+            config.save(_active_config_path())
             console.print("[dim]Switched to default prompt template[/dim]")
     else:
         print_error("Failed to delete template")

@@ -22,6 +22,25 @@ from ..models.task import VideoTask, TaskStatus
 
 console = Console()
 
+# UI switches set once by the root CLI callback (cli/app.py). --quiet promises
+# "only show errors": it silences the informational print_* helpers AND the
+# progress bars; --no-progress silences only the bars. print_error always
+# prints. Before this, both flags were parsed but changed nothing visible.
+_quiet = False
+_no_progress = False
+
+
+def set_ui_options(quiet: bool = False, no_progress: bool = False) -> None:
+    """Record the root CLI's --quiet / --no-progress flags."""
+    global _quiet, _no_progress
+    _quiet = quiet
+    _no_progress = no_progress
+
+
+def progress_disabled() -> bool:
+    """Whether progress bars should be suppressed."""
+    return _no_progress or _quiet
+
 
 class SubtitleProgress:
     """Subtitle processing progress manager."""
@@ -42,7 +61,7 @@ class SubtitleProgress:
             TimeRemainingColumn(),
             TextColumn("]"),
             console=console,
-            disable=self.disable,
+            disable=self.disable or progress_disabled(),
         )
 
     @contextmanager
@@ -186,7 +205,7 @@ class TranslationProgressTracker:
             TextColumn("[dim]~[/dim]"),
             TimeRemainingColumn(),
             console=console,
-            disable=self.disable,
+            disable=self.disable or progress_disabled(),
         )
         self._progress.start()
 
@@ -247,6 +266,8 @@ def print_translation_explainer(show_once: bool = True) -> None:
         show_once: Only show once per session (uses module-level flag).
     """
     # Module-level flag to track if already shown
+    if _quiet:
+        return
     if show_once and getattr(print_translation_explainer, "_shown", False):
         return
 
@@ -266,6 +287,8 @@ def print_translation_explainer(show_once: bool = True) -> None:
 
 def print_task_summary(tasks: List[VideoTask]) -> None:
     """Print task summary table."""
+    if _quiet:
+        return
     table = Table(title="Processing Results")
 
     table.add_column("File", style="cyan")
@@ -306,14 +329,20 @@ def print_error(message: str) -> None:
 
 def print_success(message: str) -> None:
     """Print success message."""
+    if _quiet:
+        return
     console.print(Panel(message, title="Complete", border_style="green"))
 
 
 def print_info(message: str) -> None:
     """Print info message."""
+    if _quiet:
+        return
     console.print(f"[cyan]i[/cyan] {message}")
 
 
 def print_warning(message: str) -> None:
     """Print warning message."""
+    if _quiet:
+        return
     console.print(f"[yellow]![/yellow] {message}")

@@ -85,3 +85,40 @@ def test_word_timestamps_preserved_through_minimal():
     segs = [_seg(1, 1.0, 2.0), _seg(2, 5.0, 6.0)]
     out = TimestampProcessor(mode="minimal").process(segs, audio_duration=60.0)
     assert all(s.has_word_timestamps() for s in out)
+
+
+def test_full_mode_does_not_truncate_aligned_overlong_segment():
+    # 12s of aligned speech (slow, emphatic delivery). Full mode used to cap it
+    # to reading time (~1s for "No") and drop the word timestamps with it —
+    # leaving the rest of the utterance with no subtitle at all.
+    seg = _seg(1, 0.0, 12.0, text="No")
+    out = TimestampProcessor(mode="full", max_duration=8.0).process([seg], audio_duration=20.0)
+    assert out[0].end >= 12.0 - 1e-9
+    assert out[0].has_word_timestamps()
+
+
+def test_full_mode_still_caps_unaligned_overlong_segment():
+    # Without word timing the stretched end-time is a transcriber artifact —
+    # capping those is the pass's actual job.
+    seg = _seg(1, 0.0, 60.0, text="short", words=False)
+    out = TimestampProcessor(mode="full", max_duration=8.0).process([seg], audio_duration=120.0)
+    assert out[0].end - out[0].start <= 8.0 + 1e-9
+
+
+def test_lead_in_linger_stays_inside_audio_at_tail():
+    # Overlapping input right at the end of the audio (raw ASR output in "off"
+    # mode). The neighbour clamp used to push the second start past the audio
+    # end, and the safety net then re-extended its end to 11.05s in a 10s file.
+    segs = [_seg(1, 9.4, 10.0), _seg(2, 9.9, 10.0)]
+    out = TimestampProcessor(mode="off", min_duration=1.0).process(segs, audio_duration=10.0)
+    assert all(s.start <= 10.0 + 1e-9 for s in out)
+    assert all(s.end <= 10.0 + 1e-9 for s in out)
+    assert all(s.end > s.start for s in out)
+
+
+def test_abbreviations_are_not_sentence_ends():
+    proc = TimestampProcessor(mode="off")
+    for word in ("Mr.", "Dr.", "MRS.", "vs.", "J."):
+        assert proc._is_sentence_end(word) is False, word
+    for word in ("stop.", "done!", "really?", "だ。"):
+        assert proc._is_sentence_end(word) is True, word

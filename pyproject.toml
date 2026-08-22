@@ -28,7 +28,7 @@ dependencies = [
     "ollama>=0.3.0",
     "ffmpeg-python>=0.2.0",
     "pysrt>=1.1.2",
-    "typer[all]>=0.9.0",
+    "typer>=0.9.0",
     "rich>=13.0.0",
     "pyyaml>=6.0",
 ]
@@ -53,7 +53,7 @@ serve = [
 subtitle-forge = "subtitle_forge.cli.app:cli"
 
 [project.urls]
-Repository = "https://github.com/yourusername/subtitle-forge"
+Repository = "https://github.com/Lynthar/subtitle-forge"
 
 [tool.setuptools.packages.find]
 where = ["src"]

@@ -413,9 +413,17 @@ FOLLOWING DIALOGUE (for context, DO NOT translate):
             lines = [line for line in lines if not line.startswith(('#', '-', '*', '翻译', 'Translation'))]
 
             if len(lines) == len(original_segments):
-                for i, (seg, line) in enumerate(zip(original_segments, lines)):
+                for seg, line in zip(original_segments, lines):
                     if seg.index not in index_to_translation:
-                        cleaned = re.sub(r'^[\[\(]?\d+[\]\)]?[.:：\s]*', '', line).strip()
+                        # Strip a leading index marker, but ONLY unambiguous
+                        # marker forms: "[3]", "(3)", or "3." / "3:" / "3)".
+                        # A bare number + space ("3 days later") or a pure
+                        # number line ("42") is legitimate content — the old
+                        # optional-bracket pattern ate those, the same silent
+                        # corruption _clean_translation was already fixed for.
+                        cleaned = re.sub(
+                            r'^(?:[\[\(]\d+[\]\)][.:：]?|\d+[.:：)])\s*', '', line
+                        ).strip()
                         if cleaned:
                             index_to_translation[seg.index] = cleaned
 
@@ -679,7 +687,7 @@ FOLLOWING DIALOGUE (for context, DO NOT translate):
                     f"(attempt {attempt + 1}/{self.config.max_retries}): {e}"
                 )
                 if attempt == self.config.max_retries - 1:
-                    raise TranslationError(f"Translation failed: {e}")
+                    raise TranslationError(f"Translation failed: {e}") from e
             except Exception as e:
                 # Catches httpx.TimeoutException + transport errors without
                 # a hard import-time dep on httpx. ResponseError is handled
@@ -692,7 +700,9 @@ FOLLOWING DIALOGUE (for context, DO NOT translate):
                     f"(attempt {attempt + 1}/{self.config.max_retries}): {e}"
                 )
                 if attempt == self.config.max_retries - 1:
-                    raise TranslationError(f"Translation failed after {self.config.max_retries} attempts: {e}")
+                    raise TranslationError(
+                        f"Translation failed after {self.config.max_retries} attempts: {e}"
+                    ) from e
 
         return segments  # Fallback to original
 

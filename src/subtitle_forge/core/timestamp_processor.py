@@ -51,6 +51,14 @@ class TimestampProcessor:
     # CJK language codes
     CJK_LANGUAGES = {'zh', 'ja', 'ko', 'chinese', 'japanese', 'korean', 'yue', 'wuu'}
 
+    # Words whose trailing period is an abbreviation, not a sentence boundary.
+    # Compared case-insensitively; without this the word-level sentence split
+    # cut "Mr. Smith" into two subtitles at "Mr.".
+    NON_SENTENCE_ABBREVIATIONS = frozenset({
+        "mr.", "mrs.", "ms.", "dr.", "prof.", "st.", "sr.", "jr.",
+        "vs.", "etc.", "e.g.", "i.e.", "no.", "a.m.", "p.m.", "u.s.",
+    })
+
     def __init__(
         self,
         mode: str = "minimal",
@@ -305,6 +313,17 @@ class TimestampProcessor:
                 prev_end = result[-1].end
                 # Keep at least min_gap between segments
                 new_start = max(new_start, prev_end + self.min_gap)
+                # Lead-in only ever moves a start EARLIER. When the previous
+                # segment ends at/after our acoustic onset (contact or overlap
+                # already present in the input, e.g. raw ASR output in "off"
+                # mode), the clamp above would manufacture a LATER start — and
+                # at the end of the audio that start can land past the audio
+                # itself, where the audio clamp on new_end then inverts the
+                # segment and the final safety net re-extends it beyond the
+                # file (a 10s file produced a 10.05–11.05s subtitle). Keep the
+                # acoustic onset: this never creates an overlap the input
+                # didn't already have.
+                new_start = min(new_start, seg.start)
 
             # Don't extend past next segment's (already-shifted) start. We
             # don't have it yet, but we can clamp to the original next.start
@@ -456,6 +475,16 @@ class TimestampProcessor:
         """Fix segments with excessively long display duration."""
         result = []
         for i, seg in enumerate(segments):
+            # Trust acoustic-aligned end-times completely — the same contract
+            # as _cap_overlong_displays: with word timing present, seg.end is
+            # the moment speech actually stopped, and shortening it to a
+            # "reading time" estimate cuts subtitles off mid-speech (a 12s
+            # aligned utterance was capped to 1s). _validate already records
+            # a long_duration warning for these.
+            if seg.has_word_timestamps():
+                result.append(seg)
+                continue
+
             duration = seg.end - seg.start
 
             if duration > self.max_duration:
@@ -484,6 +513,8 @@ class TimestampProcessor:
                     start=seg.start,
                     end=new_end,
                     text=seg.text,
+                    words=seg.words,
+                    confidence=seg.confidence,
                 )
 
             result.append(seg)
@@ -685,6 +716,7 @@ class TimestampProcessor:
                         start=current_time,
                         end=end_time,
                         text=sentence.strip(),
+                        confidence=seg.confidence,
                     )
                 )
 
@@ -982,6 +1014,12 @@ class TimestampProcessor:
         """Check if a word ends with sentence-ending punctuation."""
         if not word:
             return False
+        token = word.strip().lower()
+        if token in self.NON_SENTENCE_ABBREVIATIONS:
+            return False
+        # A single-letter initial ("J." in "J. Smith") is part of a name.
+        if len(token) == 2 and token.endswith(".") and token[0].isalpha():
+            return False
         # Check the last character (or last few for multi-char endings)
         for char in reversed(word):
             if char in SENTENCE_END_CHARS:
@@ -1049,6 +1087,7 @@ class TimestampProcessor:
                     start=current_time,
                     end=end_time,
                     text=sentence.strip(),
+                    confidence=seg.confidence,
                 )
             )
             current_time = end_time

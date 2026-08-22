@@ -28,7 +28,11 @@ def find_videos(path: Path, recursive: bool = False) -> List[Path]:
 
 
 def batch_process(
-    path: Path = typer.Argument(..., help="Directory or video file path", exists=True),
+    path: Optional[Path] = typer.Argument(
+        None,
+        help="Directory or video file path (omit when using --file-list)",
+        exists=True,
+    ),
     target_lang: List[str] = typer.Option(
         ...,
         "--target-lang",
@@ -65,10 +69,10 @@ def batch_process(
         "--ollama-model",
         help="Ollama model name",
     ),
-    keep_original: bool = typer.Option(
-        True,
+    keep_original: Optional[bool] = typer.Option(
+        None,
         "--keep-original/--no-keep-original",
-        help="Keep original language subtitles",
+        help="Keep original language subtitles (default: config output.keep_original)",
     ),
     file_list: Optional[Path] = typer.Option(
         None,
@@ -85,12 +89,11 @@ def batch_process(
         subtitle-forge batch --file-list videos.txt -t zh
     """
     from ...core.audio import AudioExtractor
-    from ...core.pipeline import build_timestamp_config
+    from ...core.pipeline import build_timestamp_config, build_vad_parameters
     from ...core.transcriber import Transcriber
     from ...core.translator import SubtitleTranslator, TranslationConfig
-    from ...core.subtitle import SubtitleProcessor
+    from ...core.subtitle import SubtitleProcessor, validate_language_codes
     from ...core.queue import run_batch_sync
-    from ...models.config import AppConfig
     from ...models.task import VideoTask
     from ...utils.progress import (
         SubtitleProgress,
@@ -99,19 +102,29 @@ def batch_process(
         print_info,
         print_task_summary,
     )
+    from ..app import get_config
 
-    config = AppConfig.load()
+    # get_config() (not a bare AppConfig.load()) so the root --config flag
+    # actually reaches this command.
+    config = get_config()
+
+    try:
+        validate_language_codes(target_lang)
+    except ValueError as e:
+        print_error(str(e))
+        raise typer.Exit(1)
 
     # Override config
     if whisper_model:
         config.whisper.model = whisper_model
     if ollama_model:
         config.ollama.model = ollama_model
+    keep_original = keep_original if keep_original is not None else config.output.keep_original
 
     # Collect videos
     videos = []
     if file_list:
-        with open(file_list, "r") as f:
+        with open(file_list, "r", encoding="utf-8") as f:
             for line in f:
                 line = line.strip()
                 if line and not line.startswith("#"):
@@ -120,12 +133,34 @@ def batch_process(
                         videos.append(video_path)
                     else:
                         print_info(f"Skipping non-existent file: {line}")
-    else:
+    elif path is not None:
         videos = find_videos(path, recursive)
+    else:
+        print_error("Provide a directory/video PATH or --file-list")
+        raise typer.Exit(1)
+
+    # Drop exact duplicates (a path listed twice in --file-list), keep order.
+    videos = list(dict.fromkeys(videos))
 
     if not videos:
         print_error("No video files found")
         raise typer.Exit(1)
+
+    # Refuse silent overwrites before any work starts: two inputs that write
+    # the same {output_dir}/{stem}.{lang}.srt (same-named episodes from
+    # different season folders funneled into one --output-dir, or movie.mp4
+    # next to movie.mkv) would clobber each other mid-batch.
+    targets: dict = {}
+    for video in videos:
+        key = ((output_dir or video.parent), video.stem)
+        if key in targets:
+            print_error(
+                f"Output collision: '{targets[key]}' and '{video}' would both write "
+                f"{key[0] / (video.stem + '.<lang>.srt')}\n"
+                "Rename one, or drop --output-dir so outputs stay next to their videos."
+            )
+            raise typer.Exit(1)
+        targets[key] = video
 
     print_info(f"Found {len(videos)} video(s) to process")
 
@@ -148,6 +183,7 @@ def batch_process(
         model_name=config.whisper.model,
         device=config.whisper.device,
         compute_type=config.whisper.compute_type,
+        download_root=config.whisper.download_root,
         use_whisperx=config.whisper.use_whisperx,
         whisperx_align=config.whisper.whisperx_align,
         hf_token=config.whisper.hf_token,
@@ -155,22 +191,29 @@ def batch_process(
     )
 
     timestamp_config = build_timestamp_config(config)
-    translator = SubtitleTranslator(
-        TranslationConfig(
-            model=config.ollama.model,
-            host=config.ollama.host,
-            temperature=config.ollama.temperature,
-            max_batch_size=config.ollama.max_batch_size,
-            max_retries=config.ollama.max_retries,
-            request_timeout=config.ollama.request_timeout,
-            prompt_template=config.ollama.prompt_template,
-            prompt_template_id=config.ollama.prompt_template_id,
-        )
+    vad_params = build_vad_parameters(config)
+    translation_config = TranslationConfig(
+        model=config.ollama.model,
+        host=config.ollama.host,
+        temperature=config.ollama.temperature,
+        max_batch_size=config.ollama.max_batch_size,
+        max_retries=config.ollama.max_retries,
+        request_timeout=config.ollama.request_timeout,
+        prompt_template=config.ollama.prompt_template,
+        prompt_template_id=config.ollama.prompt_template_id,
     )
-    subtitle_processor = SubtitleProcessor()
+    subtitle_processor = SubtitleProcessor(encoding=config.output.encoding)
 
     def process_task(task: VideoTask) -> None:
         """Process a single video task."""
+        # Fresh translator per task: SubtitleTranslator carries per-run failure
+        # tracking (_failed_translations, cleared at the start of translate()),
+        # so one instance shared across worker threads cross-pollutes and
+        # clears each other's records (CLAUDE.md: "Translator is constructed
+        # per call"). The Transcriber IS shared — its model load is the heavy
+        # part and _transcribe_lock serializes it.
+        translator = SubtitleTranslator(translation_config)
+
         # Extract audio
         audio_path = extractor.extract(task.video_path)
 
@@ -180,6 +223,8 @@ def batch_process(
                 audio_path,
                 beam_size=config.whisper.beam_size,
                 vad_filter=config.whisper.vad_filter,
+                batch_size=config.whisper.batch_size,
+                vad_parameters=vad_params,
                 post_process=config.timestamp.enabled,
                 timestamp_config=timestamp_config,
             )

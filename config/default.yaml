@@ -1,4 +1,10 @@
 # subtitle-forge default configuration
+#
+# NOTE: this file is the documented REFERENCE COPY of the defaults — it is
+# NOT loaded at runtime. The authoritative defaults live in
+# src/subtitle_forge/models/config.py; your editable copy lives at
+# ~/.config/subtitle-forge/config.yaml (Windows: %APPDATA%\subtitle-forge\).
+# tests/test_config.py keeps this file in sync with the code defaults.
 
 whisper:
   # Whisper model name

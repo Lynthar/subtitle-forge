@@ -170,10 +170,10 @@ class OllamaModelManager:
 
         except ResponseError as e:
             logger.error(f"Model pull failed: {e}")
-            raise RuntimeError(f"Failed to download model {model}: {e}")
+            raise RuntimeError(f"Failed to download model {model}: {e}") from e
         except Exception as e:
             logger.error(f"Unexpected error during model pull: {e}")
-            raise RuntimeError(f"Download error: {e}")
+            raise RuntimeError(f"Download error: {e}") from e
 
     def ensure_model(
         self,
