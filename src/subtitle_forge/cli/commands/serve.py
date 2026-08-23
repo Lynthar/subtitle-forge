@@ -3,7 +3,13 @@
 import typer
 
 def serve(
-    host: str = typer.Option("0.0.0.0", "--host", help="Bind address"),
+    host: str = typer.Option(
+        "127.0.0.1",
+        "--host",
+        help="Bind address. Loopback by default; pass 0.0.0.0 explicitly to "
+        "expose the API to the network (bearer token travels in plaintext "
+        "HTTP — put TLS in front for anything beyond a trusted LAN).",
+    ),
     port: int = typer.Option(8765, "--port", "-p", help="Bind port"),
     workers: int = typer.Option(
         1,
@@ -44,6 +50,7 @@ def serve(
 
     from ...server.auth import TOKEN_ENV_VAR, get_configured_token
     from ...server.app import create_app
+    from ..app import get_config
 
     if not no_auth:
         if get_configured_token() is None:
@@ -61,7 +68,11 @@ def serve(
                 err=True,
             )
 
-    app_instance = create_app(max_workers=workers, require_auth=not no_auth)
+    # get_config() (not letting create_app fall back to AppConfig.load()) so
+    # the root --config flag reaches the server like every other command.
+    app_instance = create_app(
+        config=get_config(), max_workers=workers, require_auth=not no_auth
+    )
 
     uvicorn.run(
         app_instance,

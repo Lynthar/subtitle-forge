@@ -2,12 +2,28 @@
 
 import json
 import logging
+import re
 from pathlib import Path
 from typing import Dict, List, Optional
 
+from ..models.config import AppConfig
 from ..models.prompt import PromptTemplate
 
 logger = logging.getLogger(__name__)
+
+# Template ids become filenames verbatim ({id}.json) — same containment rule
+# as language codes: an id like "../../evil" or an absolute path would write
+# (or delete) JSON outside the templates directory.
+_TEMPLATE_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$")
+
+
+def _validate_template_id(template_id: str) -> None:
+    """Raises ValueError if the id is not a safe single filename token."""
+    if not template_id or not _TEMPLATE_ID_RE.fullmatch(template_id):
+        raise ValueError(
+            f"Invalid template id {template_id!r}: use letters/digits/dot/"
+            "hyphen/underscore, starting with a letter or digit"
+        )
 
 
 # Built-in prompt templates for different video genres
@@ -248,8 +264,10 @@ Translated subtitles:""",
 class PromptLibrary:
     """Manages built-in and user-defined prompt templates."""
 
-    # User templates directory
-    USER_TEMPLATES_DIR = Path.home() / ".config" / "subtitle-forge" / "prompts"
+    # User templates directory — derived from the config file's directory so
+    # Windows uses %APPDATA%\subtitle-forge\prompts like the documented config
+    # location (a hardcoded ~/.config here silently split the two on Windows).
+    USER_TEMPLATES_DIR = AppConfig.get_config_path().parent / "prompts"
 
     def __init__(self):
         self._user_templates: Dict[str, PromptTemplate] = {}
@@ -281,6 +299,10 @@ class PromptLibrary:
                     author=data.get("author", "user"),
                     version=data.get("version", "1.0"),
                 )
+
+                # The id inside the JSON is what delete/save join into paths —
+                # refuse unsafe ids even from files already on disk.
+                _validate_template_id(template.id)
 
                 if template.is_valid():
                     self._user_templates[template.id] = template
@@ -365,6 +387,7 @@ class PromptLibrary:
         Raises:
             ValueError: If template is invalid.
         """
+        _validate_template_id(template.id)
         if not template.is_valid():
             missing = template.validate()
             raise ValueError(f"Invalid template: missing placeholders {missing}")
@@ -407,6 +430,11 @@ class PromptLibrary:
 
         if template_id not in self._user_templates:
             return False
+
+        # Loaded ids are already validated, but the argument may not be one
+        # of them under future refactors — keep the containment check local
+        # to the unlink it protects.
+        _validate_template_id(template_id)
 
         file_path = self.USER_TEMPLATES_DIR / f"{template_id}.json"
         if file_path.exists():

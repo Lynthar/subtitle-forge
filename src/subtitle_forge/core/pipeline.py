@@ -21,7 +21,7 @@ from typing import Callable, ContextManager, List, Optional
 
 from ..models.config import AppConfig
 from .audio import AudioExtractor
-from .subtitle import SubtitleProcessor, validate_language_codes
+from .subtitle import SubtitleProcessor, normalize_target_languages, validate_language_codes
 from .transcriber import Transcriber
 from .translator import SubtitleTranslator
 
@@ -66,10 +66,8 @@ class PipelineHooks:
     # Called once per target language that was skipped (same as source).
     on_translation_skipped: Optional[Callable[[str], None]] = None
 
-    # Context manager factory for per-language translation progress.
-    # Args: (target_lang, total_segments)
-    # Yields a callback (completed: int, total: int) -> None.
-    # If None, translation runs without a progress callback.
+    # Context manager factory for per-language translation progress: called with
+    # (target_lang, total_segments), yields a (completed, total) callback. None = no progress.
     translation_progress_ctx: Optional[
         Callable[[str, int], ContextManager[Callable[[int, int], None]]]
     ] = None
@@ -177,10 +175,10 @@ def run_pipeline(
     subtitle_processor = SubtitleProcessor(encoding=config.output.encoding)
     stem = video_path.stem
 
-    # Language codes become output filenames verbatim ({stem}.{lang}.srt) —
-    # reject path-metacharacter "languages" before any expensive work. This is
-    # the choke point for both entry points (server request langs included).
-    validate_language_codes(target_languages)
+    # Language codes become output filenames verbatim ({stem}.{lang}.srt), so
+    # path metacharacters must be rejected here — the single choke point for
+    # every entry path, server requests included.
+    target_languages = normalize_target_languages(target_languages)
     if source_language:
         validate_language_codes([source_language])
 

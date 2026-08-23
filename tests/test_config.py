@@ -84,3 +84,58 @@ def test_config_path_uses_appdata_on_windows(monkeypatch):
     monkeypatch.setattr(sys, "platform", "win32")
     monkeypatch.setenv("APPDATA", str(Path("/fake/appdata")))
     assert AppConfig.get_config_path() == Path("/fake/appdata") / "subtitle-forge" / "config.yaml"
+
+
+def test_validate_rejects_zero_chars_per_second():
+    # chars_per_second=0 used to save fine and only blow up later as a
+    # ZeroDivisionError in the middle of timestamp post-processing.
+    cfg = AppConfig()
+    cfg.timestamp.chars_per_second = 0
+    import pytest
+
+    with pytest.raises(ValueError, match="chars_per_second"):
+        cfg.validate()
+
+
+def test_validate_reports_every_problem_at_once():
+    import pytest
+
+    cfg = AppConfig()
+    cfg.timestamp.chars_per_second = 0
+    cfg.timestamp.mode = "minmal"  # typo
+    cfg.ollama.max_retries = 0  # range(0) would silently skip translation
+    cfg.timestamp.min_duration = 5.0
+    cfg.timestamp.max_duration = 1.0
+    with pytest.raises(ValueError) as excinfo:
+        cfg.validate()
+    message = str(excinfo.value)
+    for fragment in ("chars_per_second", "timestamp.mode", "max_retries", "max_duration"):
+        assert fragment in message, fragment
+
+
+def test_load_rejects_invalid_config_file(tmp_path):
+    import pytest
+
+    path = tmp_path / "config.yaml"
+    path.write_text("timestamp:\n  chars_per_second: 0\n", encoding="utf-8")
+    with pytest.raises(ValueError, match="chars_per_second"):
+        AppConfig.load(path)
+
+
+def test_defaults_are_valid():
+    AppConfig().validate()
+
+
+def test_saved_config_is_owner_readable_only_on_posix(tmp_path):
+    import os
+    import stat
+    import sys
+
+    import pytest
+
+    if sys.platform == "win32":
+        pytest.skip("POSIX permission bits are meaningless on Windows")
+    path = tmp_path / "config.yaml"
+    AppConfig().save(path)
+    mode = stat.S_IMODE(os.stat(path).st_mode)
+    assert mode == 0o600, oct(mode)

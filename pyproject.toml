@@ -1,5 +1,6 @@
 [build-system]
-requires = ["setuptools>=61.0", "wheel"]
+# >=77 for SPDX `license` expression + `license-files` support
+requires = ["setuptools>=77.0.3", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
@@ -8,13 +9,13 @@ version = "0.1.0"
 description = "Local video subtitle generation and translation CLI tool"
 readme = "README.md"
 requires-python = ">=3.9"
-license = {text = "MIT"}
+license = "Apache-2.0"
+license-files = ["LICENSE"]
 keywords = ["subtitle", "whisper", "translation", "cli", "ollama"]
 classifiers = [
     "Development Status :: 3 - Alpha",
     "Environment :: Console",
     "Intended Audience :: End Users/Desktop",
-    "License :: OSI Approved :: MIT License",
     "Programming Language :: Python :: 3",
     "Programming Language :: Python :: 3.9",
     "Programming Language :: Python :: 3.10",
@@ -47,6 +48,9 @@ whisperx = [
 serve = [
     "fastapi>=0.110.0",
     "uvicorn[standard]>=0.27.0",
+    # server/models.py uses Pydantic v2 API (field_validator); FastAPI's own
+    # range still admits v1, so pin the major here.
+    "pydantic>=2.0",
 ]
 
 [project.scripts]

@@ -98,13 +98,9 @@ class OllamaModelManager:
         try:
             available_models = self.list_models()
 
-            # Exact (tag-aware) match. The old `model_base in available`
-            # substring test was a false-positive machine: requesting
-            # "qwen2.5:32b" with only "qwen2.5:7b" installed reported "available"
-            # (because "qwen2.5" is a substring), so the download was skipped and
-            # translation later died with model-not-found — after transcription
-            # had already run. Ollama treats a bare name as its ":latest" tag, so
-            # normalize both sides before comparing.
+            # Exact, tag-aware match. The old `model_base in available` substring test reported
+            # "qwen2.5:32b" as installed when only "qwen2.5:7b" was — the download was skipped and
+            # translation died on model-not-found after transcription had already run.
             def _normalize(name: str) -> str:
                 return name if ":" in name else f"{name}:latest"
 
@@ -140,10 +136,8 @@ class OllamaModelManager:
 
         try:
             for progress in self.client.pull(model, stream=True):
-                # Ollama returns ProgressResponse objects with:
-                #   status: str, total: Optional[int], completed: Optional[int], digest: Optional[str]
-                # Note: 'total' and 'completed' are Optional and may be None during initialization
-                # See: https://github.com/ollama/ollama-python/blob/main/ollama/_types.py
+                # Ollama's ProgressResponse carries status/total/completed/digest, and total and
+                # completed are Optional — they can be None during initialization.
                 status = getattr(progress, "status", "unknown") or "unknown"
                 total = getattr(progress, "total", None)
                 completed = getattr(progress, "completed", None)

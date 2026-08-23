@@ -29,11 +29,9 @@ def setup_logging(
     """
     handlers = []
 
-    # Console handler with Rich. By default mirrors `level`; when the caller
-    # explicitly passes a higher console_level, the terminal stays quiet
-    # even if `level` is DEBUG (used by --save-debug-log to send DEBUG to
-    # the file without spamming the user's terminal with torio/torch
-    # extension-load fallback tracebacks).
+    # Console handler mirrors `level` unless the caller passes a higher console_level: that keeps
+    # the terminal quiet while the file still gets DEBUG (what --save-debug-log wants, since
+    # torio's extension-load fallbacks render as full tracebacks).
     effective_console_level = console_level if console_level is not None else level
     console_handler = RichHandler(
         rich_tracebacks=True,
@@ -68,10 +66,9 @@ def setup_logging(
         force=True,
     )
 
-    # Silence DEBUG/INFO from third-party libraries that are otherwise
-    # extremely noisy. These would dump native-extension probing,
-    # alignment-model migration messages, and HTTP transport details into
-    # the user's run.log without any value for subtitle debugging.
+    # Silence DEBUG/INFO from third-party libraries that would otherwise dump native-extension
+    # probing, alignment-model migration and HTTP transport detail into run.log with no value
+    # for subtitle debugging. **Add a line here when a new noisy dependency shows up.**
     NOISY_THIRD_PARTY = (
         "faster_whisper",
         "httpx",

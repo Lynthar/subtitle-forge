@@ -48,9 +48,15 @@ def show():
 
     config = _load_config()
 
-    def _display(value) -> str:
+    # Secrets never go to the terminal (or the scrollback / screen share it
+    # ends up in) — only whether one is set.
+    sensitive_fields = {"hf_token"}
+
+    def _display(value, field_name: str = "") -> str:
         if value is None:
             return "[dim]null[/dim]"
+        if field_name in sensitive_fields:
+            return "[dim]<set, hidden>[/dim]"
         text = str(value)
         if len(text) > 60:
             text = text[:57] + "..."
@@ -60,18 +66,17 @@ def show():
     table.add_column("Setting", style="cyan")
     table.add_column("Value", style="green")
 
-    # Reflect over the dataclasses so every field shows up (and new fields
-    # appear automatically) — the previous hand-maintained table silently
-    # omitted whole sections (timestamp.*) and fields (ollama.request_timeout,
-    # whisper.batch_size, ...): exactly the values `config set` writes.
+    # Reflect over the dataclasses so every field shows up, new ones included: the hand-maintained
+    # table silently omitted whole sections (timestamp.*) and fields (ollama.request_timeout,
+    # whisper.batch_size) — exactly the values `config set` writes.
     for section_field in dataclasses.fields(config):
         value = getattr(config, section_field.name)
         if dataclasses.is_dataclass(value):
             table.add_row(f"[bold]{section_field.name}[/bold]", "")
             for f in dataclasses.fields(value):
-                table.add_row(f"  {f.name}", _display(getattr(value, f.name)))
+                table.add_row(f"  {f.name}", _display(getattr(value, f.name), f.name))
         else:
-            table.add_row(section_field.name, _display(value))
+            table.add_row(section_field.name, _display(value, section_field.name))
 
     console.print(table)
     console.print(f"\nConfig file: {_config_file_display()}")
@@ -152,6 +157,15 @@ def set(
             raise typer.Exit(1)
     except (ValueError, TypeError) as e:
         print_error(f"Invalid value for {key}: {e}")
+        raise typer.Exit(1)
+
+    # Domain validation before saving — otherwise an out-of-range value
+    # (chars_per_second 0, max_retries 0, ...) persists fine and only blows
+    # up mid-job, possibly hours later.
+    try:
+        config.validate()
+    except ValueError as e:
+        print_error(str(e))
         raise typer.Exit(1)
 
     config.save(_active_config_path())

@@ -518,7 +518,7 @@ subtitle-forge batch <directory> -t <target_lang> [options]
 | `<directory>` | - | 视频目录路径（必需） |
 | `--target-lang` | `-t` | 目标语言（必需） |
 | `--recursive` | `-r` | 递归处理子目录 |
-| `--workers` | `-w` | 并发数（默认 2） |
+| `--workers` | `-w` | 并发数（默认取配置 `max_workers`，即 2；上限 4） |
 | `--file-list` | - | 从文件列表读取 |
 | `--output-dir` | `-o` | 输出目录 |
 
@@ -670,6 +670,7 @@ pip install -e '.[serve]'
 # 生成一个长随机 token，客户端要用它做 Bearer 鉴权
 export SUBTITLE_FORGE_TOKEN="$(openssl rand -hex 32)"
 
+# 默认只监听本机回环；要让其他机器访问必须显式给 --host
 subtitle-forge serve --host 0.0.0.0 --port 8765
 ```
 
@@ -677,7 +678,7 @@ subtitle-forge serve --host 0.0.0.0 --port 8765
 
 | 选项 | 默认值 | 说明 |
 |------|--------|------|
-| `--host` | `0.0.0.0` | 绑定地址 |
+| `--host` | `127.0.0.1` | 绑定地址。默认仅本机可访问；`0.0.0.0` 暴露到网络时 Bearer token 走明文 HTTP，跨出可信局域网请在前面加 TLS 反代 |
 | `--port` | `8765` | 绑定端口 |
 | `--workers` | `1` | 并发任务数，上限 4。**GPU 是瓶颈，没实测过就别调** |
 | `--no-auth` | 关 | 关闭鉴权。仅在绑定 `127.0.0.1` 的单用户机器上安全 |
@@ -692,7 +693,7 @@ subtitle-forge serve --host 0.0.0.0 --port 8765
 |------|------|------|------|
 | `POST` | `/jobs` | Bearer | 提交字幕生成任务 |
 | `GET` | `/jobs/{id}` | Bearer | 查询任务状态 / 获取输出路径 |
-| `GET` | `/health` | 无 | 存活检查 + 队列统计 |
+| `GET` | `/health` | 无 | 存活检查 + 队列统计；worker 全部死亡时返回 503（此时接受的任务永远不会执行） |
 
 `POST /jobs` 请求体：
 

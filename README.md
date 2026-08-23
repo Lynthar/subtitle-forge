@@ -132,4 +132,4 @@ HTTP server mode, privacy boundaries, and troubleshooting.
 
 ## License
 
-MIT License
+Apache License 2.0 — see [LICENSE](LICENSE).

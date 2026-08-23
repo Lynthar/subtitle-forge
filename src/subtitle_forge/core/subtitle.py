@@ -3,8 +3,11 @@
 from pathlib import Path
 from typing import Iterable, List, Optional
 from datetime import timedelta
+import codecs
 import logging
+import os
 import re
+import tempfile
 
 import pysrt
 
@@ -33,6 +36,20 @@ def validate_language_codes(languages: Iterable[str]) -> None:
                 f"Invalid language code {lang!r}: use letters/digits/hyphen, "
                 "e.g. en, zh, zh-TW, yue"
             )
+
+
+def normalize_target_languages(languages: List[str]) -> List[str]:
+    """Validate target languages and drop duplicates, preserving order.
+
+    A repeated ``-t zh`` (or a duplicated API entry) would otherwise run the
+    full LLM translation twice and write the same output file twice. Raises
+    ValueError on an unsafe token (see validate_language_codes).
+    """
+    validate_language_codes(languages)
+    deduped = list(dict.fromkeys(languages))
+    if len(deduped) != len(languages):
+        logger.info("Dropping duplicate target languages: %s -> %s", languages, deduped)
+    return deduped
 
 
 class SubtitleProcessor:
@@ -110,7 +127,23 @@ class SubtitleProcessor:
         output_path.parent.mkdir(parents=True, exist_ok=True)
 
         srt_file = self.segments_to_srt(segments)
-        srt_file.save(str(output_path), encoding=encoding or self.encoding)
+
+        # Same-directory temp file, then atomic replace: a crash mid-write must
+        # not leave a truncated .srt where a player — or a re-run's collision
+        # check — takes it for a finished subtitle.
+        fd, tmp_name = tempfile.mkstemp(
+            dir=str(output_path.parent), prefix=output_path.name + ".", suffix=".tmp"
+        )
+        os.close(fd)
+        try:
+            srt_file.save(tmp_name, encoding=encoding or self.encoding)
+            os.replace(tmp_name, str(output_path))
+        except BaseException:
+            try:
+                os.unlink(tmp_name)
+            except OSError:
+                pass
+            raise
 
         logger.info(f"Subtitles saved: {output_path}")
 
@@ -130,13 +163,28 @@ class SubtitleProcessor:
         if not input_path.exists():
             raise SubtitleError(f"Subtitle file not found: {input_path}")
 
-        # Try different encodings
-        encodings_to_try = [encoding or self.encoding, "utf-8-sig", "gbk", "gb2312", "iso-8859-1"]
+        # BOM sniff before the trial chain: a UTF-16 file "decodes" without
+        # error as ISO-8859-1 into NUL-riddled mojibake, so the fallback chain
+        # below must never get to see one.
+        with open(input_path, "rb") as fh:
+            head = fh.read(2)
+        if head in (codecs.BOM_UTF16_LE, codecs.BOM_UTF16_BE):
+            encodings_to_try = ["utf-16"]  # the codec consumes the BOM
+        else:
+            encodings_to_try = [encoding or self.encoding, "utf-8-sig", "gbk", "gb2312", "iso-8859-1"]
 
         for enc in encodings_to_try:
             try:
                 srt_file = pysrt.open(str(input_path), encoding=enc)
-                if enc != (encoding or self.encoding):
+                if enc == "iso-8859-1":
+                    # ISO-8859-1 maps every byte, so this "success" proves
+                    # nothing — the text may be mojibake from an encoding we
+                    # didn't try. Say so instead of silently corrupting.
+                    logger.warning(
+                        f"Decoded {input_path.name} as ISO-8859-1 (last-resort fallback); "
+                        "if the text looks garbled, re-save the file as UTF-8"
+                    )
+                elif enc != (encoding or self.encoding):
                     logger.info(f"Loaded file with encoding: {enc}")
                 break
             except UnicodeDecodeError:
