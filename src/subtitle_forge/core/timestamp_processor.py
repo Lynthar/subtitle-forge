@@ -161,10 +161,9 @@ class TimestampProcessor:
                     f"Sentence splitting: {original_count} segments -> {len(segments)} segments"
                 )
 
-        # Lead-in / linger applies to ALL modes (including "off") because
-        # acoustic-aligned timestamps are word onset/offset, not on-screen
-        # subtitle timing. Without this compensation subtitles feel late and
-        # disappear too fast regardless of which mode the user picked.
+        # Lead-in / linger applies to ALL modes, "off" included: aligned timestamps are word onset
+        # and offset, not on-screen timing. Without it subtitles feel late and vanish too fast
+        # whichever mode the user picked.
         segments = self._apply_lead_in_linger(segments, audio_duration)
 
         # Mode: off - trust WhisperX output completely (apart from lead-in/linger)
@@ -178,10 +177,8 @@ class TimestampProcessor:
             segments = self._cap_overlong_displays(segments)
             segments = self._fix_overlaps(segments)
             segments = self._ensure_minimum_duration(segments)
-            # _ensure_minimum_duration extends short segments to start+min_duration
-            # WITHOUT looking at the next segment's start, which re-introduces the
-            # overlaps _fix_overlaps just resolved (common in fast dialogue). Re-run
-            # the gap pass afterwards — same backstop full mode already relies on.
+            # _ensure_minimum_duration extends short segments without looking at the next start,
+            # re-introducing the overlaps _fix_overlaps just resolved. Re-run the gap pass after it.
             segments = self._ensure_minimum_gap(segments)
             if audio_duration:
                 segments = self._clamp_to_duration(segments, audio_duration)
@@ -243,10 +240,9 @@ class TimestampProcessor:
         """
         result: List[SubtitleSegment] = []
         linger = self.linger_ms / 1000.0
-        # Speech is roughly half as fast as silent reading. Use 2× the
-        # readable-time as the speech-time estimate, then add linger and a
-        # generous soft buffer (alignment-failed segments are rare, so we
-        # err on the side of under-clamping).
+        # Speech is roughly half as fast as silent reading: take 2x the readable time, then add
+        # linger and a generous buffer. Alignment-failed segments are rare, so err on
+        # under-clamping.
         soft_buffer = 1.5
 
         for seg in segments:
@@ -313,16 +309,9 @@ class TimestampProcessor:
                 prev_end = result[-1].end
                 # Keep at least min_gap between segments
                 new_start = max(new_start, prev_end + self.min_gap)
-                # Lead-in only ever moves a start EARLIER. When the previous
-                # segment ends at/after our acoustic onset (contact or overlap
-                # already present in the input, e.g. raw ASR output in "off"
-                # mode), the clamp above would manufacture a LATER start — and
-                # at the end of the audio that start can land past the audio
-                # itself, where the audio clamp on new_end then inverts the
-                # segment and the final safety net re-extends it beyond the
-                # file (a 10s file produced a 10.05–11.05s subtitle). Keep the
-                # acoustic onset: this never creates an overlap the input
-                # didn't already have.
+                # Lead-in only ever moves a start EARLIER. If the previous segment already ends
+                # at/after our acoustic onset, the clamp above manufactures a LATER start — past the
+                # audio end that inverts the segment.
                 new_start = min(new_start, seg.start)
 
             # Don't extend past next segment's (already-shifted) start. We
@@ -335,13 +324,9 @@ class TimestampProcessor:
                 next_target_start = max(next_original_start - lead_in, new_start)
                 new_end = min(new_end, next_target_start - self.min_gap)
 
-            # Never pull the end in *before* the original acoustic offset. When a
-            # neighbour sits close, the clamp above could drop new_end below
-            # seg.end, truncating real speech (in "off" mode this produced
-            # sub-perceptible, even end-before-start subtitles). Instead the next
-            # segment's lead-in yields: its start is independently clamped to
-            # prev_end + min_gap on the following iteration, so keeping our own
-            # acoustic end here cannot create an overlap.
+            # Never pull the end in before the acoustic offset: with a neighbour close by the clamp
+            # above would drop new_end below seg.end and truncate real speech. The next lead-in
+            # yields instead.
             new_end = max(new_end, seg.end)
 
             # Clamp to audio duration if known
@@ -475,12 +460,9 @@ class TimestampProcessor:
         """Fix segments with excessively long display duration."""
         result = []
         for i, seg in enumerate(segments):
-            # Trust acoustic-aligned end-times completely — the same contract
-            # as _cap_overlong_displays: with word timing present, seg.end is
-            # the moment speech actually stopped, and shortening it to a
-            # "reading time" estimate cuts subtitles off mid-speech (a 12s
-            # aligned utterance was capped to 1s). _validate already records
-            # a long_duration warning for these.
+            # Trust aligned end-times completely — same contract as _cap_overlong_displays: with
+            # word timing seg.end is when speech stopped, and a reading-time estimate cuts it off
+            # mid-speech.
             if seg.has_word_timestamps():
                 result.append(seg)
                 continue
@@ -693,11 +675,9 @@ class TimestampProcessor:
                 result.append(seg)
                 continue
 
-            # Distribute time proportionally across sentences, strictly within
-            # [seg.start, seg.end]. (See _split_segment_proportionally: inflating
-            # each piece to min_duration overflowed the parent span and produced
-            # negative-duration last pieces. Readability floors are applied later
-            # by the min-duration / min-gap passes.)
+            # Distribute time proportionally across sentences, strictly within [seg.start, seg.end]:
+            # inflating each piece to min_duration overflowed the span and produced negative last
+            # pieces.
             total_chars = sum(len(s) for s in sentences)
             total_duration = max(0.0, seg.end - seg.start)
             current_time = seg.start
@@ -746,8 +726,13 @@ class TimestampProcessor:
 
         for part in parts:
             current += part
-            # Check if this part is a sentence ending
             if SENTENCE_ENDINGS.match(part) or CJK_SENTENCE_ENDINGS.match(part):
+                # ...unless the period is an abbreviation. With alignment
+                # unavailable this is the only splitter that runs, so an
+                # unguarded "Mr." becomes a 0.18s cue of its own.
+                tokens = current.split()
+                if tokens and not self._is_sentence_end(tokens[-1]):
+                    continue
                 if current.strip():
                     sentences.append(current.strip())
                 current = ""
@@ -833,7 +818,7 @@ class TimestampProcessor:
         """
         result = []
 
-        for seg in segments:
+        for pos, seg in enumerate(segments):
             # If no word timestamps, use fallback proportional splitting
             if not seg.has_word_timestamps():
                 split_segs = self._split_segment_proportionally(seg)
@@ -848,8 +833,13 @@ class TimestampProcessor:
                 result.append(seg)
                 continue
 
-            # Apply timing corrections (chain-clamp + min-readable)
-            corrected_sentences = self._apply_sentence_timing_corrections(sentences)
+            # The next segment's start bounds the last sentence's extension:
+            # in "off" mode nothing downstream repairs overlaps, so the split
+            # must not manufacture one.
+            next_segment_start = segments[pos + 1].start if pos + 1 < len(segments) else None
+            corrected_sentences = self._apply_sentence_timing_corrections(
+                sentences, next_segment_start=next_segment_start
+            )
 
             # Create new segments for each sentence, preserving word timing.
             for sentence_text, start_time, end_time, words in corrected_sentences:
@@ -872,6 +862,7 @@ class TimestampProcessor:
     def _apply_sentence_timing_corrections(
         self,
         sentences: List[Tuple[str, float, float, Optional[List[WordTiming]]]],
+        next_segment_start: Optional[float] = None,
     ) -> List[Tuple[str, float, float, Optional[List[WordTiming]]]]:
         """
         Apply timing corrections to split sentences.
@@ -888,14 +879,23 @@ class TimestampProcessor:
         and lets `_apply_lead_in_linger` provide a uniform tail.
 
         Corrections still applied:
-        1. Chain-style: each non-last sentence's end is clamped before the
-           next one's start (avoiding overlap from any extension below).
+        1. Chain-style: every extension is bounded by the next sentence's
+           start (or, for the last sentence, by `next_segment_start`) minus
+           min_gap — a readability extension must NEVER create an overlap.
+           In minimal/full mode _fix_overlaps would repair one downstream,
+           but in "off" mode nothing does: the old unconditional
+           "at least min_duration" floor turned adjacent short sentences
+           into overlapping cues that shipped as-is.
         2. Minimum readable duration: short subtitles get extended (within
-           the chain bound) so they don't flash by faster than text can
-           be read.
+           that bound) so they don't flash by faster than text can be read.
+        3. The acoustic end itself is never reduced — bounds only limit
+           extensions, so overlaps already present in the input pass
+           through untouched (mode "off" trusts its input).
 
         Args:
             sentences: 4-tuples (text, start, end, words) from word timestamps.
+            next_segment_start: start of the FOLLOWING segment, if any —
+                bounds the last sentence's extension.
 
         Returns:
             Corrected list of (text, start, end, words) tuples.
@@ -908,6 +908,8 @@ class TimestampProcessor:
 
         for i, (text, start, original_end, words) in enumerate(sentences):
             is_last = (i == n - 1)
+            # Hard bound for any extension of this sentence's end.
+            bound = next_segment_start if is_last else sentences[i + 1][1]
 
             # Calculate minimum readable duration based on text length
             char_count = len(text)
@@ -921,25 +923,17 @@ class TimestampProcessor:
             # linger handles padding uniformly.
             end = original_end
 
-            if not is_last:
-                # Don't overlap into the next sentence's start.
-                next_start = sentences[i + 1][1]
-                end = min(end, next_start - self.min_gap)
-
             # Ensure minimum readable duration (short utterances need to be
-            # held on screen long enough for the eye to catch them).
-            actual_duration = end - start
-            if actual_duration < min_readable_duration:
-                desired_end = start + min_readable_duration
-                if is_last:
-                    end = desired_end
-                else:
-                    next_start = sentences[i + 1][1]
-                    end = min(desired_end, next_start - self.min_gap)
+            # held on screen long enough for the eye to catch them), but only
+            # as far as the bound allows.
+            if end - start < min_readable_duration:
+                end = start + min_readable_duration
+                if bound is not None:
+                    end = min(end, bound - self.min_gap)
 
-            # Final safety: ensure we have at least min_duration
-            if end - start < self.min_duration:
-                end = start + self.min_duration
+            # Extensions may be clamped below the acoustic end when the bound
+            # sits close; never truncate actual speech because of it.
+            end = max(end, original_end)
 
             corrected.append((text, start, end, words))
 
@@ -1065,7 +1059,9 @@ class TimestampProcessor:
         if len(sentences) <= 1:
             return [seg]
 
-        # Distribute time proportionally across sentences, bounded by seg.end.
+        # Distribute time proportionally across sentences, strictly within [seg.start, seg.end]:
+        # inflating each piece to min_duration overflowed the span and produced negative last
+        # pieces.
         total_chars = sum(len(s) for s in sentences)
         total_duration = max(0.0, seg.end - seg.start)
         current_time = seg.start

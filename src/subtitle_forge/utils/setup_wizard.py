@@ -1,7 +1,10 @@
 """Interactive setup wizard for first-time users."""
 
 import shutil
-from typing import Optional, Callable
+from typing import TYPE_CHECKING, Optional, Callable
+
+if TYPE_CHECKING:
+    from ..core.transcriber import Transcriber
 
 import typer
 from rich.console import Console
@@ -14,23 +17,36 @@ from ..models.config import AppConfig
 console = Console()
 
 
-def check_whisper_model(model_name: str) -> bool:
-    """Check if Whisper model is already downloaded."""
+def _build_transcriber(whisper_cfg) -> "Transcriber":
+    """A Transcriber honouring the configured cache/mirror/token settings.
+
+    The wizard used to build bare Transcriber(model_name=...) instances: with
+    a custom download_root the cache check looked in the wrong directory and
+    the download wrote to the wrong one, so the model was fetched twice.
+    """
     from ..core.transcriber import Transcriber
 
-    transcriber = Transcriber(model_name=model_name)
-    return transcriber.is_model_cached()
+    return Transcriber(
+        model_name=whisper_cfg.model,
+        download_root=whisper_cfg.download_root,
+        hf_token=whisper_cfg.hf_token,
+        hf_endpoint=whisper_cfg.hf_endpoint,
+    )
+
+
+def check_whisper_model(whisper_cfg) -> bool:
+    """Check if the configured Whisper model is already downloaded."""
+    return _build_transcriber(whisper_cfg).is_model_cached()
 
 
 def download_whisper_model(
-    model_name: str,
+    whisper_cfg,
     progress_callback: Optional[Callable[[int, int], None]] = None,
 ) -> bool:
     """Download Whisper model with progress display."""
     import logging
-    from ..core.transcriber import Transcriber
 
-    transcriber = Transcriber(model_name=model_name)
+    transcriber = _build_transcriber(whisper_cfg)
 
     # Suppress logs during download to avoid interfering with progress bar
     hf_logger = logging.getLogger("huggingface_hub")
@@ -204,22 +220,51 @@ def run_setup_wizard() -> None:
         else:
             recommended_ollama = "qwen2.5:7b"
         console.print(f"      Recommended translation model: [cyan]{recommended_ollama}[/cyan]")
+
+        # Offer to persist the recommendation. Without this the wizard said
+        # "recommended: 7b" and then step 3/5 prompted to download the
+        # config defaults (large-v3 + 14b) anyway — an OOM trap on small GPUs.
+        gpu_config = AppConfig.load()
+        if (
+            recommended_whisper != gpu_config.whisper.model
+            or recommended_ollama != gpu_config.ollama.model
+        ) and typer.confirm(
+            f"  Use the recommended models ({recommended_whisper} + {recommended_ollama})?",
+            default=True,
+        ):
+            gpu_config.whisper.model = recommended_whisper
+            gpu_config.ollama.model = recommended_ollama
+            gpu_config.save()
+            console.print("      [dim]Saved recommended models to config[/dim]")
     else:
         console.print("  [yellow]INFO[/yellow] No NVIDIA GPU detected")
         console.print("      Transcription will use CPU (slower but functional)")
+        console.print("      Recommended Whisper model for CPU: [cyan]small[/cyan]")
         console.print("      Recommended translation model: [cyan]qwen2.5:7b[/cyan]")
 
-        # Persist CPU settings now. The config default is device=cuda, and on the
-        # base install (no WhisperX) faster-whisper has no CUDA auto-fallback — so
-        # without this the very first `process`/`transcribe` run would crash while
-        # loading the model on a non-existent CUDA device. int8 is the standard
-        # CPU compute type (float16 isn't supported on CPU).
+        # Persist CPU settings now: the default is device=cuda and the base install has no CUDA
+        # auto-fallback, so the first run would crash loading the model. int8 is the CPU compute
+        # type.
         cpu_config = AppConfig.load()
         if cpu_config.whisper.device != "cpu":
             cpu_config.whisper.device = "cpu"
             cpu_config.whisper.compute_type = "int8"
             cpu_config.save()
             console.print("      [dim]Saved device=cpu, compute_type=int8 to config[/dim]")
+
+        # Models behind a confirm — unlike the device fix above this is a
+        # quality/speed tradeoff, not a crash fix, so the user decides.
+        if (
+            cpu_config.whisper.model != "small" or cpu_config.ollama.model != "qwen2.5:7b"
+        ) and typer.confirm(
+            "  Use the recommended CPU models (small + qwen2.5:7b)? "
+            "The defaults (large-v3 + 14b) are painfully slow on CPU",
+            default=True,
+        ):
+            cpu_config.whisper.model = "small"
+            cpu_config.ollama.model = "qwen2.5:7b"
+            cpu_config.save()
+            console.print("      [dim]Saved recommended models to config[/dim]")
 
     console.print()
 
@@ -228,10 +273,10 @@ def run_setup_wizard() -> None:
 
     config = AppConfig.load()
 
-    if check_whisper_model(config.whisper.model):
+    if check_whisper_model(config.whisper):
         console.print(f"  [green]OK[/green] Whisper model '{config.whisper.model}' is ready")
     else:
-        from ..core.transcriber import Transcriber, WHISPER_MODEL_SIZES
+        from ..core.transcriber import WHISPER_MODEL_SIZES
 
         model_size = WHISPER_MODEL_SIZES.get(config.whisper.model, 1_000_000_000)
         model_size_mb = model_size / (1024 * 1024)
@@ -247,7 +292,7 @@ def run_setup_wizard() -> None:
             console.print("  [dim]Tip: If interrupted, it will auto-download when you run subtitle-forge[/dim]")
             console.print()
 
-            if download_whisper_model(config.whisper.model):
+            if download_whisper_model(config.whisper):
                 console.print()
                 console.print(f"  [green]OK[/green] Whisper model '{config.whisper.model}' downloaded successfully!")
             else:

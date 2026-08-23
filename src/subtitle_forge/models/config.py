@@ -2,6 +2,7 @@
 
 import os
 import sys
+import tempfile
 from pathlib import Path
 from dataclasses import dataclass, field, asdict
 from typing import Optional
@@ -41,16 +42,15 @@ class WhisperConfig:
     vad_filter: bool = True
     batch_size: Optional[int] = None
     download_root: Optional[str] = None
-    # VAD parameters for subtitle timing optimization.
-    # 250ms padding (vs silero default 400ms) keeps subtitles tight without
-    # eating word onsets. 700ms min silence avoids merging adjacent utterances
-    # in fast dialogue while still letting the VAD bridge natural breath pauses.
+    # VAD tuned for subtitle timing: 250ms padding (silero default 400) keeps subtitles tight
+    # without eating word onsets; 700ms min silence avoids merging adjacent utterances in fast
+    # dialogue while still bridging natural breath pauses.
     speech_pad_ms: int = 250
     min_silence_duration_ms: int = 700
     # WhisperX options
     use_whisperx: bool = True  # Use WhisperX for better timestamp accuracy
     whisperx_align: bool = True  # Enable forced alignment with wav2vec2
-    hf_token: Optional[str] = None  # HuggingFace token for pyannote models
+    hf_token: Optional[str] = None  # HuggingFace token for gated/private model downloads
     # HuggingFace mirror for users in regions with limited access
     hf_endpoint: Optional[str] = None  # e.g., "https://hf-mirror.com"
 
@@ -118,7 +118,7 @@ class AppConfig:
         with open(path, "r", encoding="utf-8") as f:
             data = yaml.safe_load(f) or {}
 
-        return cls(
+        config = cls(
             whisper=WhisperConfig(**data.get("whisper", {})),
             ollama=OllamaConfig(**data.get("ollama", {})),
             output=OutputConfig(**data.get("output", {})),
@@ -127,6 +127,76 @@ class AppConfig:
             log_level=data.get("log_level", "INFO"),
             log_file=data.get("log_file"),
         )
+        config.validate()
+        return config
+
+    def validate(self) -> None:
+        """Raise ValueError listing every invalid field value.
+
+        Called from load() (and by `config set` before saving) so a bad value
+        fails before any work starts — chars_per_second=0 used to save fine
+        and surface as a ZeroDivisionError mid-transcription.
+        """
+
+        def _num(value) -> bool:
+            return isinstance(value, (int, float)) and not isinstance(value, bool)
+
+        ts, wh, ol = self.timestamp, self.whisper, self.ollama
+        errors = []
+
+        if ts.mode not in ("off", "minimal", "full"):
+            errors.append(f"timestamp.mode must be one of off/minimal/full, got {ts.mode!r}")
+        if wh.device not in ("cuda", "cpu", "auto"):
+            errors.append(f"whisper.device must be one of cuda/cpu/auto, got {wh.device!r}")
+        if self.log_level not in ("DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"):
+            errors.append(
+                f"log_level must be one of DEBUG/INFO/WARNING/ERROR/CRITICAL, got {self.log_level!r}"
+            )
+
+        positive = [
+            ("timestamp.min_duration", ts.min_duration),
+            ("timestamp.max_duration", ts.max_duration),
+            ("timestamp.max_gap_warning", ts.max_gap_warning),
+            ("timestamp.chars_per_second", ts.chars_per_second),
+            ("timestamp.cjk_chars_per_second", ts.cjk_chars_per_second),
+            ("ollama.request_timeout", ol.request_timeout),
+        ]
+        non_negative = [
+            ("timestamp.min_gap", ts.min_gap),
+            ("timestamp.lead_in_ms", ts.lead_in_ms),
+            ("timestamp.linger_ms", ts.linger_ms),
+            ("whisper.speech_pad_ms", wh.speech_pad_ms),
+            ("whisper.min_silence_duration_ms", wh.min_silence_duration_ms),
+            ("ollama.temperature", ol.temperature),
+        ]
+        # max_retries >= 1 matters: the translator's attempt loop is
+        # `range(max_retries)`, so 0 would silently skip translation entirely.
+        at_least_one = [
+            ("timestamp.split_threshold", ts.split_threshold),
+            ("whisper.beam_size", wh.beam_size),
+            ("ollama.max_batch_size", ol.max_batch_size),
+            ("ollama.max_retries", ol.max_retries),
+            ("max_workers", self.max_workers),
+        ]
+        for name, value in positive:
+            if not _num(value) or value <= 0:
+                errors.append(f"{name} must be a number > 0, got {value!r}")
+        for name, value in non_negative:
+            if not _num(value) or value < 0:
+                errors.append(f"{name} must be a number >= 0, got {value!r}")
+        for name, value in at_least_one:
+            if not _num(value) or value < 1:
+                errors.append(f"{name} must be an integer >= 1, got {value!r}")
+        if wh.batch_size is not None and (not _num(wh.batch_size) or wh.batch_size < 1):
+            errors.append(f"whisper.batch_size must be an integer >= 1 or null, got {wh.batch_size!r}")
+        if _num(ts.min_duration) and _num(ts.max_duration) and ts.max_duration < ts.min_duration:
+            errors.append(
+                f"timestamp.max_duration ({ts.max_duration}) must be >= "
+                f"timestamp.min_duration ({ts.min_duration})"
+            )
+
+        if errors:
+            raise ValueError("Invalid configuration:\n  " + "\n  ".join(errors))
 
     def save(self, path: Optional[Path] = None) -> None:
         """Save configuration to YAML file.
@@ -143,9 +213,24 @@ class AppConfig:
 
         path.parent.mkdir(parents=True, exist_ok=True)
 
-        data = asdict(self)
+        content = yaml.safe_dump(
+            asdict(self), default_flow_style=False, allow_unicode=True, sort_keys=False
+        )
 
-        with open(path, "w", encoding="utf-8") as f:
-            yaml.safe_dump(
-                data, f, default_flow_style=False, allow_unicode=True, sort_keys=False
-            )
+        # Same-directory temp file, then replace: a crash mid-write must not
+        # leave a truncated config. 0600 because the file can hold hf_token in
+        # plaintext, and the umask default 0644 is world-readable on POSIX.
+        fd, tmp_name = tempfile.mkstemp(
+            dir=str(path.parent), prefix=path.name + ".", suffix=".tmp"
+        )
+        try:
+            with os.fdopen(fd, "w", encoding="utf-8") as f:
+                f.write(content)
+            os.chmod(tmp_name, 0o600)
+            os.replace(tmp_name, str(path))
+        except BaseException:
+            try:
+                os.unlink(tmp_name)
+            except OSError:
+                pass
+            raise

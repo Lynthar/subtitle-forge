@@ -45,11 +45,11 @@ def batch_process(
         "-o",
         help="Output directory (default: same as video)",
     ),
-    workers: int = typer.Option(
-        2,
+    workers: Optional[int] = typer.Option(
+        None,
         "--workers",
         "-w",
-        help="Number of concurrent workers",
+        help="Number of concurrent workers (default: config max_workers)",
         min=1,
         max=4,
     ),
@@ -92,7 +92,7 @@ def batch_process(
     from ...core.pipeline import build_timestamp_config, build_vad_parameters
     from ...core.transcriber import Transcriber
     from ...core.translator import SubtitleTranslator, TranslationConfig
-    from ...core.subtitle import SubtitleProcessor, validate_language_codes
+    from ...core.subtitle import SubtitleProcessor, normalize_target_languages
     from ...core.queue import run_batch_sync
     from ...models.task import VideoTask
     from ...utils.progress import (
@@ -109,10 +109,17 @@ def batch_process(
     config = get_config()
 
     try:
-        validate_language_codes(target_lang)
+        # Validates for filename safety AND drops duplicate -t values (batch
+        # doesn't go through run_pipeline, so it normalizes here itself).
+        target_lang = normalize_target_languages(target_lang)
     except ValueError as e:
         print_error(str(e))
         raise typer.Exit(1)
+
+    # --workers falls back to config.max_workers — before this the config
+    # field was displayed by `config show` but never read anywhere.
+    if workers is None:
+        workers = min(max(1, config.max_workers), 4)
 
     # Override config
     if whisper_model:
@@ -146,10 +153,9 @@ def batch_process(
         print_error("No video files found")
         raise typer.Exit(1)
 
-    # Refuse silent overwrites before any work starts: two inputs that write
-    # the same {output_dir}/{stem}.{lang}.srt (same-named episodes from
-    # different season folders funneled into one --output-dir, or movie.mp4
-    # next to movie.mkv) would clobber each other mid-batch.
+    # Refuse silent overwrites before any work starts: two inputs writing the same
+    # {output_dir}/{stem}.{lang}.srt — same-named episodes funneled into one --output-dir, or
+    # movie.mp4 beside movie.mkv — would clobber each other mid-batch.
     targets: dict = {}
     for video in videos:
         key = ((output_dir or video.parent), video.stem)
@@ -206,12 +212,9 @@ def batch_process(
 
     def process_task(task: VideoTask) -> None:
         """Process a single video task."""
-        # Fresh translator per task: SubtitleTranslator carries per-run failure
-        # tracking (_failed_translations, cleared at the start of translate()),
-        # so one instance shared across worker threads cross-pollutes and
-        # clears each other's records (CLAUDE.md: "Translator is constructed
-        # per call"). The Transcriber IS shared — its model load is the heavy
-        # part and _transcribe_lock serializes it.
+        # Fresh translator per task: it carries per-run failure tracking that
+        # workers sharing one instance would clear out from under each other.
+        # The Transcriber is shared — its model load is heavy, and a lock serializes it.
         translator = SubtitleTranslator(translation_config)
 
         # Extract audio

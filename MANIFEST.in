@@ -1,0 +1,2 @@
+include config/default.yaml
+recursive-include docs *.md

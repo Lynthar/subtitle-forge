@@ -61,3 +61,6 @@ class HealthResponse(BaseModel):
     queue_pending: int
     queue_processing: int
     transcriber_loaded: bool
+    # 0 before startup (lifespan not entered yet); when the runner is running
+    # with 0 alive workers the endpoint returns 503 instead of this model.
+    workers_alive: int = 0

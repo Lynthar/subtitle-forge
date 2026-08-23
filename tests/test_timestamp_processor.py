@@ -116,6 +116,48 @@ def test_lead_in_linger_stays_inside_audio_at_tail():
     assert all(s.end > s.start for s in out)
 
 
+def test_off_mode_sentence_split_does_not_manufacture_overlap():
+    # Two sentences in one aligned segment, the first very short: the
+    # min-readable extension must not override its own chain clamp. "off" has
+    # no downstream repair pass, so an overlap it emits ships as-is.
+    words = [WordTiming("Hi.", 0.0, 0.2), WordTiming("Okay", 0.2, 1.2)]
+    seg = SubtitleSegment(1, 0.0, 1.2, "Hi. Okay", words=words)
+    out = TimestampProcessor(mode="off", split_sentences=True).process([seg], audio_duration=100.0)
+    assert len(out) == 2
+    assert _overlaps(out) == []
+    # The acoustic ends must survive (bounds only limit extensions).
+    assert out[0].end >= 0.2 - 1e-9
+
+
+def test_off_mode_split_last_sentence_respects_next_segment():
+    # A short final sentence ("Hmm") at the end of one segment used to be
+    # extended to min_duration straight into the FOLLOWING segment's span.
+    words_a = [WordTiming("Sure.", 0.0, 9.8), WordTiming("Hmm", 9.9, 10.0)]
+    words_b = [WordTiming("Next", 10.1, 11.0), WordTiming("line", 11.0, 12.0)]
+    segs = [
+        SubtitleSegment(1, 0.0, 10.0, "Sure. Hmm", words=words_a),
+        SubtitleSegment(2, 10.1, 12.0, "Next line", words=words_b),
+    ]
+    out = TimestampProcessor(mode="off", split_sentences=True).process(segs, audio_duration=100.0)
+    assert len(out) == 3
+    assert _overlaps(out) == []
+
+
+def test_text_split_keeps_abbreviations_with_their_sentence():
+    # The text-level splitter runs whenever alignment produced no word timing,
+    # and it used to lack the abbreviation guard that the word-level splitter
+    # got — real GPU output cut "Mr. Smith arrived..." into a 0.18s "Mr." cue.
+    proc = TimestampProcessor(mode="minimal")
+    assert proc._split_into_sentences("Mr. Smith arrived at dawn. He waited.") == [
+        "Mr. Smith arrived at dawn.",
+        "He waited.",
+    ]
+    assert proc._split_into_sentences("Dr. Chen opened the door. Three were gone.") == [
+        "Dr. Chen opened the door.",
+        "Three were gone.",
+    ]
+
+
 def test_abbreviations_are_not_sentence_ends():
     proc = TimestampProcessor(mode="off")
     for word in ("Mr.", "Dr.", "MRS.", "vs.", "J."):

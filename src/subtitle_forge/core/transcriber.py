@@ -1,14 +1,8 @@
 """Speech recognition module using faster-whisper and WhisperX."""
 
-# =============================================================================
-# CRITICAL: PyTorch 2.6+ compatibility fix for WhisperX/pyannote-audio
-# MUST be set BEFORE any imports that might load torch (including faster_whisper)
-#
-# PyTorch 2.6 changed torch.load() default from weights_only=False to weights_only=True
-# This breaks loading pyannote-audio models which contain omegaconf configuration objects
-# Reference: https://github.com/m-bain/whisperX/issues/1304
-#            https://github.com/pyannote/pyannote-audio/issues/1908
-# =============================================================================
+# CRITICAL: set TORCH_FORCE_NO_WEIGHTS_ONLY_LOAD before any import that may load torch
+# (faster_whisper included). PyTorch 2.6 flipped torch.load()'s weights_only default, which
+# breaks pyannote-audio models carrying omegaconf objects. **Never reorder these imports.**
 import os
 os.environ.setdefault('TORCH_FORCE_NO_WEIGHTS_ONLY_LOAD', '1')
 
@@ -102,14 +96,16 @@ class TranscriptionInfo:
 class Transcriber:
     """Speech-to-text processor using faster-whisper."""
 
-    # Model VRAM requirements (MB)
+    # VRAM in MB. Ties are broken by insertion order (stable sort in
+    # select_optimal_model), so large-v3 must precede large-v2 — reversed,
+    # every GPU with the VRAM for either gets recommended the older model.
     MODEL_VRAM_REQUIREMENTS = {
         "tiny": 1000,
         "base": 1500,
         "small": 2500,
         "medium": 5000,
-        "large-v2": 6000,
         "large-v3": 6000,
+        "large-v2": 6000,
         "large-v3-turbo": 3000,
         "distil-large-v2": 4000,
         "distil-large-v3": 4000,
@@ -136,7 +132,8 @@ class Transcriber:
             download_root: Model download directory.
             use_whisperx: Use WhisperX for better timestamp accuracy.
             whisperx_align: Enable forced alignment with wav2vec2.
-            hf_token: HuggingFace token for pyannote models.
+            hf_token: HuggingFace token, passed to model downloads (needed
+                only for gated/private repos).
             hf_endpoint: HuggingFace mirror endpoint (e.g., "https://hf-mirror.com").
         """
         self.model_name = model_name
@@ -171,12 +168,8 @@ class Transcriber:
         self._whisperx_align_language: Optional[str] = None
         # Warn only once per instance that VAD tuning doesn't apply under WhisperX.
         self._whisperx_vad_warned = False
-        # Serializes transcription when one Transcriber is shared across threads
-        # (the `batch` command does this). Whisper/CTranslate2 inference and the
-        # lazy model loads are not safe to run concurrently on one instance, and
-        # concurrent GPU inference just thrashes VRAM — the same reason the server
-        # defaults to a single worker. Translation (a separate Ollama service)
-        # still runs in parallel across batch workers.
+        # Serializes transcription when one Transcriber is shared across threads (batch does this):
+        # CTranslate2 inference and the lazy model loads are not concurrency-safe on one instance.
         self._transcribe_lock = threading.Lock()
 
     @classmethod
@@ -276,8 +269,8 @@ class Transcriber:
 
         try:
             if progress_callback:
-                # Create a custom tqdm class that captures progress
-                # Must be a proper class (not lambda) because tqdm_class needs class methods like get_lock()
+                # Create a custom tqdm class that captures progress Must be a proper class (not
+                # lambda) because tqdm_class needs class methods like get_lock()
                 from tqdm.auto import tqdm as base_tqdm
                 import time
 
@@ -316,6 +309,7 @@ class Transcriber:
                         cache_dir=self.download_root,
                         local_files_only=False,
                         tqdm_class=ProgressTqdm,
+                        token=self.hf_token,
                     )
                 finally:
                     if original_tqdm_disable is None:
@@ -327,6 +321,7 @@ class Transcriber:
                     repo_id,
                     cache_dir=self.download_root,
                     local_files_only=False,
+                    token=self.hf_token,
                 )
 
             logger.info(f"Model {self.model_name} downloaded successfully")
@@ -374,12 +369,9 @@ class Transcriber:
 
         logger.info("Model loaded successfully")
 
-    # VAD parameters tuned for subtitle timing.
-    # speech_pad 250ms (vs silero default 400ms) keeps segments tight without
-    # eating word onsets; min_silence 700ms avoids merging adjacent utterances
-    # in fast dialogue. Subtitle on-screen feel comes from lead-in/linger in
-    # TimestampProcessor, NOT from VAD padding — keep these two concerns
-    # separate.
+    # VAD tuned for subtitle timing: speech_pad 250ms (silero default 400) keeps segments tight
+    # without eating word onsets; min_silence 700ms avoids merging adjacent utterances in fast
+    # dialogue. On-screen feel comes from lead-in/linger, NOT VAD padding — keep them apart.
     DEFAULT_VAD_PARAMETERS = {
         "speech_pad_ms": 250,
         "min_silence_duration_ms": 700,
@@ -531,10 +523,9 @@ class Transcriber:
             self._whisperx_vad_warned = True
 
         try:
-            # Determine device. When falling back to CPU the compute type must
-            # follow: CTranslate2 rejects float16 on CPU ("float16 computation
-            # is not supported"), so keeping the configured GPU compute type
-            # would make the fallback fail anyway.
+            # When falling back to CPU the compute type must follow: CTranslate2 rejects float16 on
+            # CPU ("float16 computation is not supported"), so keeping the configured GPU compute
+            # type would make the fallback fail anyway.
             device = self.device
             compute_type = self.compute_type
             if device == "cuda" and not torch.cuda.is_available():
@@ -545,10 +536,9 @@ class Transcriber:
                     f"(compute_type={compute_type})"
                 )
 
-            # Load WhisperX model. beam_size is a WhisperX ASR option (it lives in
-            # asr_options, not as a transcribe() kwarg); pass it through so the
-            # configured beam size isn't silently dropped. Guard against older
-            # WhisperX signatures that predate asr_options.
+            # beam_size is a WhisperX ASR option — it lives in asr_options, not as a transcribe()
+            # kwarg, so pass it through or the configured beam size is silently dropped. Guard
+            # against older WhisperX signatures that predate asr_options.
             if self._whisperx_model is None:
                 logger.debug(f"Loading WhisperX model: {self.model_name}")
                 load_kwargs = dict(
@@ -569,14 +559,9 @@ class Transcriber:
             # Load audio
             audio = whisperx.load_audio(str(audio_path))
 
-            # Build kwargs for transcribe — WhisperX versions vary, so only
-            # pass parameters that are supported. We try the rich call first
-            # and fall back if older WhisperX rejects unknown kwargs.
-            # batch_size: honour config.whisper.batch_size when set — 8 (the
-            # WhisperX-documented sweet spot on a 24GB GPU) only as a default,
-            # since smaller cards need a smaller value to avoid OOM.
-            # chunk_size 20s (vs default 30s) reduces the chance of slicing
-            # through the middle of a long sentence.
+            # WhisperX versions vary, so try the rich call first and fall back when an older one
+            # rejects unknown kwargs. batch_size honours config; 8 is only a default, chunk_size 20s
+            # cuts less.
             transcribe_kwargs: dict = {
                 "language": language,
                 "batch_size": batch_size if batch_size else 8,
@@ -597,14 +582,9 @@ class Transcriber:
             if self.whisperx_align and result.get("segments"):
                 logger.debug("Performing forced alignment with wav2vec2")
                 try:
-                    # Load alignment model. wav2vec2 align models are
-                    # language-specific (en/ja/zh are entirely different models),
-                    # so reload whenever the detected language changes. Without
-                    # this, a long-lived Transcriber (server TranscriberHolder or
-                    # the batch command) would align every subsequent language
-                    # with the FIRST job's model — producing wrong word-level
-                    # timestamps, or an alignment error that gets swallowed and
-                    # silently drops word timing.
+                    # Reload the alignment model when the detected language changes: these models
+                    # are language-specific, so a long-lived Transcriber aligns later jobs with the
+                    # first one's model.
                     if (
                         self._whisperx_align_model is None
                         or self._whisperx_metadata is None

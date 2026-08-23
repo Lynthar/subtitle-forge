@@ -56,11 +56,20 @@ def create_app(
     @app.get("/health", response_model=HealthResponse)
     async def health() -> HealthResponse:
         stats = await store.stats()
+        # A dead worker pool means accepted jobs will never run — that must
+        # not look healthy. 503 here is what lets a supervisor or client
+        # notice, instead of polling a forever-'pending' job against a 200.
+        if runner.is_running and runner.alive_workers == 0:
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail="No job workers alive; accepted jobs will never run",
+            )
         return HealthResponse(
             version=__version__,
             queue_pending=stats["pending"],
             queue_processing=stats["processing"],
             transcriber_loaded=holder.is_loaded,
+            workers_alive=runner.alive_workers,
         )
 
     @app.post(
@@ -74,10 +83,9 @@ def create_app(
         if err:
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=err)
 
-        # Backpressure: pending jobs previously had no bound at all (the
-        # store's max_jobs only evicts *terminal* jobs). Approximate check —
-        # concurrent submits can slightly overshoot, which is fine for a cap
-        # whose job is to stop runaway queues, not to account precisely.
+        # Backpressure for pending jobs: the store's max_jobs only evicts *terminal* ones. The check
+        # is approximate — concurrent submits can overshoot, which is fine for a cap meant to stop
+        # runaway queues rather than to account precisely.
         stats = await store.stats()
         if stats["pending"] >= max_pending:
             raise HTTPException(

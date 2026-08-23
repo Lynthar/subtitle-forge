@@ -5,6 +5,7 @@ from dataclasses import dataclass
 import json
 import re
 import logging
+import time
 
 import ollama
 from ollama import Client, ResponseError
@@ -37,10 +38,9 @@ class TranslationConfig:
 class SubtitleTranslator:
     """Subtitle translator using Ollama LLM."""
 
-    # Default JSON prompt template. Used when the user has NOT picked a
-    # library template — drives Ollama's `format="json"` mode for reliable
-    # parsing. The legacy [N]-line text format is still used when a custom
-    # or library template is selected (see _is_json_mode / _parse_response).
+    # Default JSON prompt template, used when no library/custom template is picked — it drives
+    # Ollama's format="json" for reliable parsing. A selected template falls back to the legacy
+    # [N]-line text path (see _is_json_mode / _parse_response).
     DEFAULT_PROMPT_TEMPLATE = """You are a professional subtitle translator. Translate dialogue from {source_lang} into {target_lang}.
 
 GUIDELINES
@@ -148,10 +148,9 @@ Translated subtitles:"""
     @property
     def client(self) -> Client:
         if self._client is None:
-            # httpx is a transitive dependency of ollama-python, so it's
-            # always installed when ollama is — but defer the import so the
-            # module can still load in environments that haven't pip
-            # installed dependencies yet (e.g. during static checks).
+            # httpx is a transitive dependency of ollama-python, so it ships alongside it; the
+            # import is deferred only so this module still loads where dependencies are not
+            # installed yet.
             try:
                 import httpx
                 timeout = httpx.Timeout(self.config.request_timeout, connect=10.0)
@@ -415,12 +414,9 @@ FOLLOWING DIALOGUE (for context, DO NOT translate):
             if len(lines) == len(original_segments):
                 for seg, line in zip(original_segments, lines):
                     if seg.index not in index_to_translation:
-                        # Strip a leading index marker, but ONLY unambiguous
-                        # marker forms: "[3]", "(3)", or "3." / "3:" / "3)".
-                        # A bare number + space ("3 days later") or a pure
-                        # number line ("42") is legitimate content — the old
-                        # optional-bracket pattern ate those, the same silent
-                        # corruption _clean_translation was already fixed for.
+                        # Strip a leading index marker, but ONLY unambiguous forms: [3], (3), 3. /
+                        # 3: / 3). A bare number plus space or a pure number line is legitimate
+                        # content.
                         cleaned = re.sub(
                             r'^(?:[\[\(]\d+[\]\)][.:：]?|\d+[.:：)])\s*', '', line
                         ).strip()
@@ -525,12 +521,9 @@ FOLLOWING DIALOGUE (for context, DO NOT translate):
         if len(translated) < 2 and len(original) > 10:
             return original
 
-        # Strip a leftover index marker at the start — but ONLY the *bracketed*
-        # form ([5], (5)). The old pattern also matched bare digits, which
-        # silently corrupts any translation that legitimately begins with a
-        # number ("10時に…", "3 days later", "42号房间…"); a pure-number line
-        # ("42") was erased entirely. JSON mode never puts an index inside the
-        # value (the index is the key), so skip the strip there altogether.
+        # Strip a leftover index marker only in its bracketed form ([5], (5)): the old pattern also
+        # matched bare digits and corrupted translations beginning with a number. JSON mode skips
+        # this.
         if not self._is_json_mode():
             translated = re.sub(r'^[\[\(]\d+[\]\)]\s*', '', translated)
 
@@ -641,11 +634,9 @@ FOLLOWING DIALOGUE (for context, DO NOT translate):
                     segments,
                 )
 
-                # Log compressed summary of failures for this batch.
-                # INFO not WARNING: batch-level issues are usually fixed by
-                # the individual retry that runs immediately after — the
-                # final WARNING (if any) is emitted from translate() once
-                # all batches have settled.
+                # Compressed per-batch failure summary at INFO, not WARNING: the individual retry
+                # that runs immediately after usually fixes these. The final WARNING, if any, comes
+                # from translate() once all batches have settled.
                 if self._batch_failure_indices:
                     summary_parts = []
                     for reason, indices in self._batch_failure_indices.items():
@@ -657,20 +648,17 @@ FOLLOWING DIALOGUE (for context, DO NOT translate):
                         summary_parts.append(f"{reason} [{idx_str}]")
                     logger.info(f"Batch parse issues, retrying individually: {'; '.join(summary_parts)}")
 
-                # Check for failed translations and retry individually.
-                # Detection: translated text is identical to the original AND
-                # the source/target are not the same language (which would
-                # make identical text a legitimate outcome).
+                # Failure detection: the translated text is identical to the original AND source !=
+                # target (same language makes identical text a legitimate outcome).
                 failed_segments = [
                     (i, seg) for i, seg in enumerate(translated)
                     if seg.text == segments[i].text
                     and source_lang != target_lang
                 ]
 
-                # Retry ANY failures individually — the prior "only if >50%
-                # failed" threshold left small batches with 1–2 untranslated
-                # segments unfixed, which is the most common failure mode in
-                # practice.
+                # Retry ANY failure individually — the old "only if >50% failed" threshold left
+                # small batches with one or two untranslated segments unfixed, the most common
+                # failure in practice.
                 if failed_segments:
                     logger.debug(
                         f"Batch had {len(failed_segments)} failure(s), retrying individually"
@@ -682,29 +670,57 @@ FOLLOWING DIALOGUE (for context, DO NOT translate):
                 return translated
 
             except ResponseError as e:
+                # Client errors (bad request, model not found) won't heal on
+                # retry — fail immediately. 5xx / 429 / unknown are worth
+                # retrying: a local Ollama restarting or overloaded recovers.
+                status_code = getattr(e, "status_code", None)
+                if (
+                    isinstance(status_code, int)
+                    and 400 <= status_code < 500
+                    and status_code != 429
+                ):
+                    raise TranslationError(f"Translation failed: {e}") from e
                 logger.warning(
                     f"Translation request failed "
                     f"(attempt {attempt + 1}/{self.config.max_retries}): {e}"
                 )
                 if attempt == self.config.max_retries - 1:
                     raise TranslationError(f"Translation failed: {e}") from e
+                time.sleep(min(2 ** attempt, 8))
             except Exception as e:
-                # Catches httpx.TimeoutException + transport errors without
-                # a hard import-time dep on httpx. ResponseError is handled
-                # above for retry-on-server-error semantics.
-                err_name = type(e).__name__
-                if "Timeout" not in err_name and "Connect" not in err_name:
+                if not self._is_retryable_transport_error(e):
                     raise
                 logger.warning(
-                    f"Translation request failed ({err_name}) "
+                    f"Translation request failed ({type(e).__name__}) "
                     f"(attempt {attempt + 1}/{self.config.max_retries}): {e}"
                 )
                 if attempt == self.config.max_retries - 1:
                     raise TranslationError(
                         f"Translation failed after {self.config.max_retries} attempts: {e}"
                     ) from e
+                time.sleep(min(2 ** attempt, 8))
 
         return segments  # Fallback to original
+
+    @staticmethod
+    def _is_retryable_transport_error(e: Exception) -> bool:
+        """Whether an exception is a transient transport failure worth retrying.
+
+        httpx.TransportError covers the whole family — timeouts, connect
+        failures, AND read/write/protocol errors (an Ollama dying mid-response
+        raises ReadError or RemoteProtocolError). The previous class-NAME
+        match on "Timeout"/"Connect" let those escape as raw httpx exceptions
+        with no retry at all.
+        """
+        try:
+            import httpx
+        except ImportError:
+            name = type(e).__name__
+            return any(
+                token in name
+                for token in ("Timeout", "Connect", "Read", "Write", "Protocol")
+            )
+        return isinstance(e, httpx.TransportError)
 
     def _retry_failed_individually(
         self,
@@ -744,6 +760,12 @@ FOLLOWING DIALOGUE (for context, DO NOT translate):
                         end=seg.end,
                         text=trans_text,
                     )
+                    # The retry fixed it — drop the stale record, or the final
+                    # warning and translation_failures.json report a failure
+                    # that no longer exists. Indices are unique file-wide.
+                    self._failed_translations = [
+                        f for f in self._failed_translations if f["index"] != seg.index
+                    ]
                     logger.debug(f"Successfully retried segment {seg.index}")
 
             except Exception as e:
@@ -777,11 +799,9 @@ FOLLOWING DIALOGUE (for context, DO NOT translate):
             logger.warning("Source and target languages are the same, skipping translation")
             return segments
 
-        # Reset failure tracking per call. One SubtitleTranslator is reused
-        # across every target language in a `process` run, and clear_failed_
-        # translations() was never called — so without this the second language's
-        # translation_failures.json (and the "N failed" warning) inherited the
-        # first language's records.
+        # Reset failure tracking per call: one SubtitleTranslator is reused across every target
+        # language in a `process` run, so without this the second language's failures file and "N
+        # failed" warning inherit the first language's records.
         self.clear_failed_translations()
         self._batch_failure_indices = {}
 

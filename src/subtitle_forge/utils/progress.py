@@ -22,10 +22,9 @@ from ..models.task import VideoTask, TaskStatus
 
 console = Console()
 
-# UI switches set once by the root CLI callback (cli/app.py). --quiet promises
-# "only show errors": it silences the informational print_* helpers AND the
-# progress bars; --no-progress silences only the bars. print_error always
-# prints. Before this, both flags were parsed but changed nothing visible.
+# UI switches set once by the root CLI callback. --quiet promises "only errors", so it silences
+# the print_* helpers AND the progress bars; --no-progress silences only the bars; print_error
+# always prints. Both flags used to be parsed and change nothing.
 _quiet = False
 _no_progress = False
 

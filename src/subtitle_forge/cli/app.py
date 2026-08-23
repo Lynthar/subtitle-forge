@@ -19,13 +19,9 @@ app = typer.Typer(
 
 console = Console()
 
-# Register subcommands.
-# transcribe/translate/batch/serve each expose a single action, so they are
-# registered as plain root commands (`subtitle-forge transcribe video.mp4`).
-# NOTE: they must NOT be attached via add_typer() — a sub-Typer added that way
-# is a Click *group* and never auto-invokes a lone command, so the documented
-# `subtitle-forge transcribe <video>` form would fail with "No such command".
-# `config` is a genuine multi-command group, so it stays a sub-Typer.
+# transcribe/translate/batch/serve expose a single action each, so they register as plain root
+# commands. **Never attach them with add_typer()** — that makes a Click *group*, which never
+# auto-invokes its lone command, so `subtitle-forge transcribe <video>` fails with No such command.
 app.command("transcribe", help="Transcribe video to subtitles")(transcribe.transcribe_video)
 app.command("translate", help="Translate existing subtitles")(translate.translate_subtitle)
 app.command("batch", help="Batch process multiple videos")(batch.batch_process)
@@ -34,10 +30,9 @@ app.add_typer(config.app, name="config", help="Configuration management")
 
 # Global config
 _config: Optional[AppConfig] = None
-# Path passed via the root --config flag; None = the default location. The
-# config subcommands need the PATH (not just the loaded object) so that
-# `--config custom.yaml config set ...` reads AND writes custom.yaml instead
-# of reading it and then saving to the default path.
+# The config subcommands need the PATH, not just the loaded object, so that
+# `--config custom.yaml config set ...` reads AND writes custom.yaml instead of reading it
+# and saving to the default location. None = default location.
 _config_path: Optional[Path] = None
 
 
@@ -89,12 +84,18 @@ def main(
     """subtitle-forge - Local video subtitle generation and translation tool"""
     global _config, _config_path
 
-    # Load configuration
-    if config_file:
-        _config_path = config_file
-        _config = AppConfig.load(config_file)
-    else:
-        _config = get_config()
+    # Load configuration. load() validates field ranges and raises ValueError
+    # with the full list of problems — surface that as a clean error instead
+    # of a traceback.
+    try:
+        if config_file:
+            _config_path = config_file
+            _config = AppConfig.load(config_file)
+        else:
+            _config = get_config()
+    except ValueError as e:
+        console.print(f"[red]{e}[/red]")
+        raise typer.Exit(1)
 
     # Setup logging
     log_level = "DEBUG" if verbose else ("ERROR" if quiet else _config.log_level)
@@ -258,17 +259,13 @@ def process(
         debug_dir.mkdir(exist_ok=True)
         debug_log_path = str(debug_dir / "run.log")
         debug_failed_log_path = str(debug_dir / "translation_failures.json")
-        # File handler captures DEBUG; console stays at INFO so the user's
-        # terminal isn't flooded with third-party stack traces (notably
-        # torio's FFmpeg-extension probing fallbacks, which Rich renders
-        # as full tracebacks even though they're harmless DEBUG noise).
+        # File handler captures DEBUG; console stays at INFO so the terminal is not flooded with
+        # third-party stack traces (torio's FFmpeg-extension probing, which Rich renders in full).
         setup_logging(level="DEBUG", log_file=debug_log_path, console_level="INFO")
 
-    # Build VAD parameters with full 3-layer precedence:
-    #   CLI flag > --vad-mode preset > config.whisper.{speech_pad_ms,min_silence_duration_ms}
-    # Using build_vad_parameters (not the bare Transcriber.get_vad_parameters,
-    # which ignores config) is what makes the configured VAD tuning actually
-    # take effect on the CLI, matching the server path.
+    # Build VAD parameters with the full precedence: CLI flag > --vad-mode preset > config.
+    # Going through build_vad_parameters (not the bare Transcriber.get_vad_parameters, which
+    # ignores config) is what makes configured VAD tuning take effect on the CLI too.
     from ..core.pipeline import build_vad_parameters
     vad_params = build_vad_parameters(
         cfg,
@@ -401,8 +398,17 @@ def process(
                                 description=dp.status.replace("_", " ").capitalize(),
                             )
 
-                    translator.ensure_model_ready(progress_callback=update_download)
+                    ready = translator.ensure_model_ready(progress_callback=update_download)
 
+                # ensure_model_ready returns False on download failure —
+                # printing success and only failing after transcription
+                # finished wastes the whole GPU run.
+                if not ready:
+                    print_error(
+                        f"Failed to download model '{cfg.ollama.model}'. "
+                        "Run: subtitle-forge config pull-model"
+                    )
+                    raise typer.Exit(1)
                 print_info("Model downloaded successfully!\n")
             else:
                 print_error("Translation requires the configured model. Run: subtitle-forge config pull-model")
@@ -501,6 +507,10 @@ def process(
             f"  Output directory: {output_dir}"
         )
 
+    except typer.Exit:
+        # typer.Exit subclasses RuntimeError — without this re-raise the
+        # handler below would print an empty error panel for clean exits.
+        raise
     except Exception as e:
         print_error(str(e))
         raise typer.Exit(1)

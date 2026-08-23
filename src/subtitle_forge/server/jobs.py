@@ -50,19 +50,29 @@ class JobStore:
     def __init__(self, max_jobs: int = 500):
         self._jobs: "OrderedDict[str, Job]" = OrderedDict()
         self._max = max_jobs
-        self._lock = asyncio.Lock()
+        # Created lazily inside a running loop: on Python 3.9 asyncio
+        # primitives bind their loop at construction, and this object predates
+        # uvicorn's — an eager Lock() dies "attached to a different loop".
+        self._lock: Optional[asyncio.Lock] = None
+
+    def _get_lock(self) -> asyncio.Lock:
+        # Only called from coroutines; no await between check and set, so this
+        # is race-free within one event loop.
+        if self._lock is None:
+            self._lock = asyncio.Lock()
+        return self._lock
 
     async def add(self, job: Job) -> None:
-        async with self._lock:
+        async with self._get_lock():
             self._jobs[job.job_id] = job
             self._evict_if_needed()
 
     async def get(self, job_id: str) -> Optional[Job]:
-        async with self._lock:
+        async with self._get_lock():
             return self._jobs.get(job_id)
 
     async def stats(self) -> dict:
-        async with self._lock:
+        async with self._get_lock():
             pending = sum(1 for j in self._jobs.values() if j.status == "pending")
             processing = sum(1 for j in self._jobs.values() if j.status == "processing")
             return {"pending": pending, "processing": processing, "total": len(self._jobs)}
@@ -88,7 +98,10 @@ class JobRunner:
         self._store = store
         self._processor = processor
         self._max_workers = max_workers
-        self._queue: asyncio.Queue[Job] = asyncio.Queue()
+        # Created in start(): on Python 3.9 an asyncio.Queue binds its loop at
+        # construction, and __init__ predates uvicorn's — workers on the wrong
+        # loop die and every job then sits in 'pending' while /health says 200.
+        self._queue: Optional[asyncio.Queue] = None
         self._workers: List[asyncio.Task] = []
         self._running = False
 
@@ -96,18 +109,34 @@ class JobRunner:
         if self._running:
             return
         self._running = True
+        self._queue = asyncio.Queue()
         loop = asyncio.get_running_loop()
         for i in range(self._max_workers):
-            self._workers.append(loop.create_task(self._worker(i)))
+            worker = loop.create_task(self._worker(i))
+            worker.add_done_callback(self._on_worker_done)
+            self._workers.append(worker)
         logger.info("JobRunner started with %d worker(s)", self._max_workers)
 
+    @staticmethod
+    def _on_worker_done(task: "asyncio.Task") -> None:
+        if task.cancelled():
+            return
+        exc = task.exception()
+        if exc is not None:
+            logger.error("Job worker died unexpectedly: %r", exc)
+
+    @property
+    def is_running(self) -> bool:
+        return self._running
+
+    @property
+    def alive_workers(self) -> int:
+        return sum(1 for w in self._workers if not w.done())
+
     async def stop(self) -> None:
-        # Cancelling a worker task does NOT stop a job already running inside
-        # run_in_executor — Python threads can't be killed, so an in-flight
-        # transcription keeps the GPU busy until it finishes or the process
-        # exits, and may still write output files after its job was marked
-        # failed (see the CancelledError handler in _worker). We only cancel
-        # the awaiting coroutines here.
+        # Cancelling a worker task does NOT stop a job already inside run_in_executor — threads
+        # cannot be killed, so it keeps the GPU busy and may still write output after the job is
+        # failed.
         if not self._running:
             return
         self._running = False
@@ -118,14 +147,18 @@ class JobRunner:
         logger.info("JobRunner stopped")
 
     async def submit(self, job: Job) -> None:
+        if self._queue is None:
+            raise RuntimeError("JobRunner.submit() called before start()")
         await self._store.add(job)
         await self._queue.put(job)
 
     async def _worker(self, idx: int) -> None:
         loop = asyncio.get_running_loop()
+        queue = self._queue
+        assert queue is not None  # start() created it before spawning workers
         while True:
             try:
-                job = await self._queue.get()
+                job = await queue.get()
             except asyncio.CancelledError:
                 return
 
@@ -154,11 +187,11 @@ class JobRunner:
                 logger.exception("[worker %d] job %s failed", idx, job.job_id)
             finally:
                 job.completed_at = _utcnow()
-                self._queue.task_done()
+                queue.task_done()
 
     @property
     def queue_size(self) -> int:
-        return self._queue.qsize()
+        return self._queue.qsize() if self._queue is not None else 0
 
 
 def new_job_id() -> str:
