@@ -1,0 +1,4 @@
+# Store and check out every path as LF. Without this, a checkout under
+# core.autocrlf=true rewrites the whole tree as CRLF, and every file then reads
+# as a full rewrite in diffs, burying the real change.
+* text=auto eol=lf
