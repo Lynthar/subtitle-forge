@@ -1,123 +1,103 @@
 # subtitle-forge
 
-[English](README.md) | **简体中文**
+[![license](https://img.shields.io/github/license/Lynthar/subtitle-forge)](LICENSE)
 
-在本地用 AI 生成和翻译视频字幕，不依赖任何云服务。
+本地优先的视频字幕流水线：faster-whisper 转写 + Ollama 本地大模型翻译，CLI 与 HTTP 服务同源
 
-## 特性
+[English](README.md) | 简体中文
 
-- **本地推理** —— 转写和翻译都跑在自己机器上，音频与字幕文本不发往任何云服务（[网络边界](docs/user-guide.md#五隐私与网络边界)）
-- **语音识别** —— faster-whisper，支持 99 种以上语言，可选 WhisperX 强制对齐
-- **AI 翻译** —— 走本地 LLM（Ollama），带上下文
-- **GPU 加速** —— 可选，支持 CUDA
-- **批量处理** —— 多个视频一起跑，并发数可配
-- **HTTP 服务模式** —— 可选的 REST 接口，给媒体服务器和自动化用
+给它一个视频文件，它转写出字幕，再翻译成你指定的语言。我计划的是一条能脚本化的自动
+批量字幕生产流水线，并且除非你把 Ollama 的地址指向另一台机器，否则你的音视频和字幕
+内容都不会离开本地。CLI 和 HTTP 服务跑的是同一份代码，服务端只是在前面加了一个任务
+队列。
 
-## 快速开始
-
-### 1. 装依赖
-
-```bash
-# macOS
-brew install ffmpeg ollama
-
-# Ubuntu/Debian
-sudo apt install ffmpeg
-curl -fsSL https://ollama.ai/install.sh | sh
-
-# Windows：分别从 https://ffmpeg.org 和 https://ollama.ai 装
+```mermaid
+flowchart LR
+    V[video.mp4] --> F[ffmpeg<br>抽音] --> W[faster-whisper<br>转写] --> X[WhisperX<br>逐词对齐，可选] --> T[时轴后处理<br>VAD、留白、拆句] --> O[Ollama<br>翻译] --> S[video.zh.srt]
 ```
 
-### 2. 起 Ollama
+## 安装
+
+**没有发布到 PyPI**，需要从源码安装。前置条件：Python 3.9+、PATH 里有 `ffmpeg`、以及
+一个正在运行的 Ollama。
 
 ```bash
-ollama serve
-```
-
-### 3. 装 subtitle-forge
-
-```bash
-# 基础安装
+git clone https://github.com/Lynthar/subtitle-forge.git
+cd subtitle-forge
 pip install -e .
-
-# 强烈建议加上：WhisperX 提供 wav2vec2 强制对齐，词级时间戳才准。
-# 不装的话时间轴会退回 faster-whisper 自己的词级时间戳，精度低一档。
-pip install -e '.[whisperx]'
 ```
 
-### 4. 跑一遍配置向导
+两个值得装的可选组件：
+
+```bash
+pip install -e '.[whisperx]'   # 逐词强制对齐
+pip install -e '.[serve]'      # HTTP 服务
+```
+
+NVIDIA 显卡不是必需的，但有没有它差别很大。
+
+## 用法
+
+先跑这一条，它会检查 ffmpeg、Ollama 和显卡，并把模型下载下来：
 
 ```bash
 subtitle-forge quickstart
 ```
 
-向导会检查 ffmpeg / Ollama / GPU 是否就位，并把默认的 Whisper 与 Ollama 模型先下下来——省得第一次真跑的时候卡在几个 GB 的下载上。
-
-### 5. 生成字幕
+然后：
 
 ```bash
 subtitle-forge process video.mp4 -t zh
+subtitle-forge process video.mp4 -t zh -t ja --bilingual
+subtitle-forge batch ./videos/ -t zh --recursive -w 2
+subtitle-forge transcribe video.mp4              # 只转写
+subtitle-forge translate video.en.srt -t zh      # 翻译现成的 SRT
+subtitle-forge serve --host 127.0.0.1 --port 8765
 ```
 
-## 常见用法
+输出文件放在源文件的同一个目录下：`{文件名}.{语言}.srt`，双语是
+`{文件名}.{源}-{目标}.srt`。翻译内置十套提示词模板。`batch` 处理一个目录，可以递归，
+并发数自己指定。
 
-```bash
-# 生成单语字幕
-subtitle-forge process video.mp4 -t zh        # 中文
-subtitle-forge process video.mp4 -t ja        # 日文
-
-# 一次生成多种语言
-subtitle-forge process video.mp4 -t zh -t ja -t ko
-
-# 双语字幕
-subtitle-forge process video.mp4 -t zh --bilingual
-
-# 批量处理
-subtitle-forge batch ./videos/ -t zh
-subtitle-forge batch ./videos/ -t zh --recursive
-
-# 只转写，不翻译
-subtitle-forge transcribe video.mp4
-
-# 翻译现成的字幕文件
-subtitle-forge translate video.en.srt -t zh
-
-# 感觉哪里不对时用——会留下 run.log 和 translation_failures.json
-subtitle-forge process video.mp4 -t zh --save-debug-log
-```
+`serve` 默认绑定 `127.0.0.1`，需要 bearer token——用 `openssl rand -hex 32` 生成一个，
+通过 `SUBTITLE_FORGE_TOKEN` 传入。token 走的是明文 HTTP，所以一旦把绑定地址挪出环回，
+前面就得加 TLS。另外要把它当成文件系统访问权限来对待：拿着 token 的人可以让服务读取
+它权限内的任意路径。`--no-auth` 是给单人本机用的，在非环回地址上用它只会警告、不会拒绝。
 
 ## 配置
 
-```bash
-subtitle-forge config show                          # 看全部设置
-subtitle-forge config set whisper.model large-v3    # 改一项
-subtitle-forge config check --verbose               # 系统诊断
-```
+`~/.config/subtitle-forge/config.yaml`，首次运行时创建。常改的几个键：
 
-配置文件在 `~/.config/subtitle-forge/config.yaml`（Windows 是 `%APPDATA%\subtitle-forge\config.yaml`）。每个字段的默认值和这么定的理由，见 [`config/default.yaml`](config/default.yaml)。
+| 键 | 默认 |
+|---|---|
+| `whisper.model` | `large-v3` |
+| `whisper.device` / `compute_type` | `cuda` / `float16` |
+| `whisper.use_whisperx` | `true` |
+| `ollama.model` | `qwen2.5:14b` |
+| `ollama.host` | `http://localhost:11434` |
+| `timestamp.mode` | `minimal` |
+| `max_workers` | `2` |
 
-## 隐私与网络
+仓库里的 `config/default.yaml` 是一份带注释的参考副本，**运行时不读它**。
 
-推理是在本地，但「本地优先」不等于「从不联网」：
+## 能力边界
 
-- **首次下模型要联网** —— Whisper 权重从 HuggingFace 拿，翻译模型从 Ollama 拿。之后就全程离线了。
-- **`ollama.host` 可以指向另一台机器。** 默认是 `localhost`；改了它，字幕文本就发去那台主机了。
-- **`--save-debug-log` / `--save-failed-log` 会把对白写进磁盘** —— 失败报告里含原始字幕文本，发给别人之前先读一遍。
-- **输出默认写在源视频旁边**，文件权限跟着系统走。
-
-细节、遥测关闭方式、以及完全离线部署的检查清单：[隐私与网络边界](docs/user-guide.md#五隐私与网络边界)。
+- **只输出 SRT**，不支持 WebVTT、ASS 和 TTML。
+- **翻译必须有 Ollama。** 没有 Ollama 仍然可以 `transcribe`，但也只能做到这一步：翻译
+  不走云端，也不自带模型。
+- **Whisper 的 99 种语言指的是转写能力。** 翻译这边只有十四种有正式语言名，其余的会把
+  语言码原样交给模型。
+- **音轨是按声道数选的**，所以一个 2.0 主音轨加 5.1 导演解说的片源，可能转写的是解说。
+  目前还没有 `--audio-track` 这个旗标。
+- **强制对齐失败时会静默降级**：你拿到的是段级时间戳，加日志里的一条警告，而不是一个错误。
+- **HTTP 服务的任务队列在内存里。** 重启会丢掉队列，也没有单任务取消和真实的进度百分比。
 
 ## 文档
 
-**[使用指南](docs/user-guide.md)** 是完整参考——分平台安装、按 RTX 系列的 GPU/CUDA 配置、命令参考、HTTP 服务模式、隐私边界、排障。
-
-## 环境要求
-
-- Python 3.9+
-- ffmpeg
-- Ollama
-- NVIDIA 显卡（可选，用于加速）
+- [用户指南](docs/user-guide.md) —— 分平台安装、每个选项、隐私与网络边界、故障排查。
 
 ## 许可证
 
-MIT License
+GNU Affero 通用公共许可证 v3.0 only —— 见 [LICENSE](LICENSE)。Copyright (c) 2026 Lynthar。
+
+本项目依赖 [pysrt](https://pypi.org/project/pysrt/)（GPLv3），整体以 AGPLv3 分发。

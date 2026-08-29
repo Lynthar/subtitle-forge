@@ -1,135 +1,116 @@
 # subtitle-forge
 
-**English** | [简体中文](README.zh-CN.md)
+[![license](https://img.shields.io/github/license/Lynthar/subtitle-forge)](LICENSE)
 
-Generate and translate video subtitles locally using AI — no cloud services required.
+Local-first CLI and HTTP pipeline that transcribes video with faster-whisper and translates subtitles via Ollama
 
-## Features
+English | [简体中文](README.zh-CN.md)
 
-- **Local inference** — transcription and translation run on your machine; no audio or subtitle text is sent to any cloud service ([network boundaries](docs/user-guide.md#五隐私与网络边界))
-- **Speech Recognition** — faster-whisper with support for 99+ languages, optional WhisperX forced alignment
-- **AI Translation** — context-aware translation using a local LLM (Ollama)
-- **GPU Acceleration** — CUDA support for fast processing (optional)
-- **Batch Processing** — process multiple videos with configurable concurrency
-- **HTTP Server Mode** — optional REST API for media servers and automation
+Give it a video file and it transcribes the subtitles, then translates them into
+the language you specify. What I set out to build is a scriptable pipeline for
+producing subtitles in bulk, and unless you point Ollama at another machine,
+none of your media or subtitle content leaves this one. The CLI and the HTTP
+service run the same code; the service just puts a job queue in front of it.
 
-## Quick Start
-
-### 1. Install dependencies
-
-```bash
-# macOS
-brew install ffmpeg ollama
-
-# Ubuntu/Debian
-sudo apt install ffmpeg
-curl -fsSL https://ollama.ai/install.sh | sh
-
-# Windows: install from https://ffmpeg.org and https://ollama.ai
+```mermaid
+flowchart LR
+    V[video.mp4] --> F[ffmpeg<br>audio] --> W[faster-whisper<br>transcription] --> X[WhisperX<br>word alignment, optional] --> T[timing<br>VAD, padding, splitting] --> O[Ollama<br>translation] --> S[video.zh.srt]
 ```
 
-### 2. Start Ollama
+## Install
+
+Not published on PyPI; install from source. Prerequisites: Python 3.9+, `ffmpeg`
+on PATH, and a running Ollama.
 
 ```bash
-ollama serve
-```
-
-### 3. Install subtitle-forge
-
-```bash
-# Base install
+git clone https://github.com/Lynthar/subtitle-forge.git
+cd subtitle-forge
 pip install -e .
-
-# Strongly recommended: WhisperX provides forced wav2vec2 alignment for
-# accurate word-level timestamps. Without it, subtitle timing falls back
-# to faster-whisper's lower-precision word timestamps.
-pip install -e '.[whisperx]'
 ```
 
-### 4. Run the setup wizard
+Two extras worth having:
+
+```bash
+pip install -e '.[whisperx]'   # word-level forced alignment
+pip install -e '.[serve]'      # the HTTP service
+```
+
+An NVIDIA GPU is not required, but it makes a big difference.
+
+## Usage
+
+Run this first: it checks ffmpeg, Ollama and your GPU, and downloads the models.
 
 ```bash
 subtitle-forge quickstart
 ```
 
-The wizard checks ffmpeg / Ollama / GPU availability and downloads the default
-Whisper + Ollama models, so the first real run isn't blocked on multi-GB
-downloads.
-
-### 5. Generate subtitles
+Then:
 
 ```bash
 subtitle-forge process video.mp4 -t zh
+subtitle-forge process video.mp4 -t zh -t ja --bilingual
+subtitle-forge batch ./videos/ -t zh --recursive -w 2
+subtitle-forge transcribe video.mp4              # transcription only
+subtitle-forge translate video.en.srt -t zh      # translate an existing SRT
+subtitle-forge serve --host 127.0.0.1 --port 8765
 ```
 
-## Common Use Cases
+Output files go in the same directory as the source: `{name}.{lang}.srt`, or
+`{name}.{source}-{target}.srt` for bilingual. Translation uses ten built-in
+prompt templates. `batch` processes a directory, optionally recursively, with a
+worker count you set.
 
-```bash
-# Generate subtitles in one language
-subtitle-forge process video.mp4 -t zh        # Chinese
-subtitle-forge process video.mp4 -t ja        # Japanese
-
-# Generate subtitles in multiple languages
-subtitle-forge process video.mp4 -t zh -t ja -t ko
-
-# Create bilingual subtitles
-subtitle-forge process video.mp4 -t zh --bilingual
-
-# Batch process videos
-subtitle-forge batch ./videos/ -t zh
-subtitle-forge batch ./videos/ -t zh --recursive
-
-# Transcribe only (no translation)
-subtitle-forge transcribe video.mp4
-
-# Translate existing subtitles
-subtitle-forge translate video.en.srt -t zh
-
-# When something feels off — saves run.log + translation_failures.json
-subtitle-forge process video.mp4 -t zh --save-debug-log
-```
+`serve` binds to `127.0.0.1` and expects a bearer token — generate one with
+`openssl rand -hex 32` and pass it as `SUBTITLE_FORGE_TOKEN`. The token travels
+over plain HTTP, so put TLS in front if you move that binding off loopback. Also
+treat it as equivalent to filesystem access: anyone holding it can ask the
+service to read any path the process can read. `--no-auth` exists for
+single-user local runs and only warns when used off loopback.
 
 ## Configuration
 
-```bash
-subtitle-forge config show                          # view every setting
-subtitle-forge config set whisper.model large-v3    # change one
-subtitle-forge config check --verbose               # system diagnostics
-```
+`~/.config/subtitle-forge/config.yaml`, created on first run. The keys you're
+likely to change:
 
-Config lives at `~/.config/subtitle-forge/config.yaml` (Windows:
-`%APPDATA%\subtitle-forge\config.yaml`). Full field reference with defaults and
-the reasoning behind them: [`config/default.yaml`](config/default.yaml).
+| Key | Default |
+|---|---|
+| `whisper.model` | `large-v3` |
+| `whisper.device` / `compute_type` | `cuda` / `float16` |
+| `whisper.use_whisperx` | `true` |
+| `ollama.model` | `qwen2.5:14b` |
+| `ollama.host` | `http://localhost:11434` |
+| `timestamp.mode` | `minimal` |
+| `max_workers` | `2` |
 
-## Privacy & Network
+`config/default.yaml` in the repository is a commented reference copy — it isn't
+read at runtime.
 
-Inference is local, but "local-first" is not the same as "never connects":
+## Limitations
 
-- **Model downloads need network access the first time** — Whisper weights from
-  HuggingFace, translation models from Ollama. Everything afterwards is offline.
-- **`ollama.host` can point at another machine.** It defaults to `localhost`; if
-  you change it, subtitle text goes to that host.
-- **`--save-debug-log` / `--save-failed-log` write dialogue to disk** — the
-  failure report contains original subtitle text. Read before sharing.
-- **Output is written next to the source video** by default, inheriting your
-  OS file permissions.
-
-Details, telemetry opt-out, and a fully-offline deployment checklist:
-[隐私与网络边界](docs/user-guide.md#五隐私与网络边界).
+- **SRT output only** — no WebVTT, ASS or TTML.
+- **Translation needs Ollama.** Without it you can still `transcribe`, but that's
+  as far as it goes: translation has no cloud fallback and no bundled model.
+- **Whisper's 99 languages refer to transcription.** Translation has proper
+  language names for fourteen; anything else gets passed to the model as a bare
+  language code.
+- **It picks the audio track by channel count**, so a file with a 2.0 main track
+  and a 5.1 commentary track can end up transcribing the commentary. There's no
+  `--audio-track` flag yet.
+- **When forced alignment fails it falls back quietly** — you get segment-level
+  timestamps and a warning in the log, not an error.
+- **The HTTP service keeps its job queue in memory.** Restarting loses the queue,
+  and there's no per-job cancel or real progress percentage.
 
 ## Documentation
 
-The **[Usage Guide](docs/user-guide.md)** (Chinese) is the complete reference —
-per-platform installation, GPU/CUDA setup per RTX series, command reference,
-HTTP server mode, privacy boundaries, and troubleshooting.
-
-## Requirements
-
-- Python 3.9+
-- ffmpeg
-- Ollama
-- NVIDIA GPU (optional, for acceleration)
+- [User guide](docs/user-guide.md) — installation per platform, every option,
+  privacy and network boundaries, troubleshooting. Written in Chinese.
 
 ## License
 
-Apache License 2.0 — see [LICENSE](LICENSE).
+GNU Affero General Public License v3.0 only — see [LICENSE](LICENSE).
+Copyright (c) 2026 Lynthar.
+
+This project depends on [pysrt](https://pypi.org/project/pysrt/), which is
+GPLv3; the AGPLv3 of the combined work is what you receive it under.

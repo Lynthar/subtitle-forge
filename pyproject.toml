@@ -9,7 +9,7 @@ version = "0.1.0"
 description = "Local video subtitle generation and translation CLI tool"
 readme = "README.md"
 requires-python = ">=3.9"
-license = "Apache-2.0"
+license = "AGPL-3.0-only"
 license-files = ["LICENSE"]
 keywords = ["subtitle", "whisper", "translation", "cli", "ollama"]
 classifiers = [
