@@ -74,10 +74,8 @@ def transcribe_video(
         subtitle-forge transcribe video.mp4
         subtitle-forge transcribe video.mp4 --language en --model large-v3
     """
-    from ...core.audio import AudioExtractor
-    from ...core.pipeline import build_timestamp_config, build_vad_parameters
+    from ...core.pipeline import PipelineHooks, build_vad_parameters, run_pipeline
     from ...core.transcriber import Transcriber
-    from ...core.subtitle import SubtitleProcessor
     from ...utils.progress import (
         SubtitleProgress,
         print_success,
@@ -119,15 +117,10 @@ def transcribe_video(
         # Determine WhisperX usage
         whisperx_enabled = use_whisperx if use_whisperx is not None else config.whisper.use_whisperx
 
-        transcriber = Transcriber(
+        transcriber = Transcriber.from_config(
+            config.whisper,
             model_name=model_name,
-            device=config.whisper.device,
-            compute_type=config.whisper.compute_type,
-            download_root=config.whisper.download_root,
             use_whisperx=whisperx_enabled,
-            whisperx_align=config.whisper.whisperx_align,
-            hf_token=config.whisper.hf_token,
-            hf_endpoint=config.whisper.hf_endpoint,
         )
 
         # Log which backend will be used
@@ -181,65 +174,55 @@ def transcribe_video(
 
         # ========== Phase 2: Main processing (single progress bar) ==========
 
+        # CLI overrides go onto the config, which is what run_pipeline reads.
+        config.whisper.vad_filter = vad_filter
+        if batch_size is not None:
+            config.whisper.batch_size = batch_size
+
         with progress.track_video(video.name, total_steps=3) as tracker:
-            # 1. Extract audio
             tracker.set_description("Extracting audio...")
-            extractor = AudioExtractor()
-            audio_path = extractor.extract(video)
-            tracker.update("Audio extraction complete")
 
-            # 2. Transcribe (model already prepared)
-            tracker.set_description("Transcribing...")
+            def hook_audio_extracted(_audio_path):
+                tracker.update("Audio extraction complete")
+                tracker.set_description("Transcribing...")
 
-            # Build timestamp config (None when post-processing is disabled)
-            timestamp_config = (
-                build_timestamp_config(
-                    config,
-                    mode_override=timestamp_mode,
-                    split_sentences_override=split_sentences,
-                )
-                if post_process
-                else None
-            )
-
-            try:
-                segments, info = transcriber.transcribe(
-                    audio_path,
-                    language=language,
-                    beam_size=config.whisper.beam_size,
-                    vad_filter=vad_filter,
-                    batch_size=batch_size if batch_size is not None else config.whisper.batch_size,
-                    vad_parameters=build_vad_parameters(config),
-                    post_process=post_process and config.timestamp.enabled,
-                    timestamp_config=timestamp_config,
-                )
+            def hook_transcribe_complete(_segment_count, _detected_lang):
                 tracker.update("Transcription complete")
-
-                # 3. Save subtitles
                 tracker.set_description("Saving subtitles...")
 
-                # Output path. Build from the stem so a multi-dot name keeps
-                # its inner parts — chained with_suffix() treated ".final" in
-                # "movie.final.mp4" as a suffix and produced "movie.en.srt".
-                if output is None:
-                    output = video.parent / f"{video.stem}.{info.language}.srt"
-
-                processor = SubtitleProcessor(encoding=config.output.encoding)
-                processor.save(segments, output)
+            def hook_original_saved(_path):
                 tracker.update("Save complete")
-            finally:
-                # Always remove the extracted audio, even if transcription failed
-                # (previously this unlink sat after the transcribe() call with no
-                # finally, so a failure leaked a ~100MB/hour WAV in the temp dir).
-                audio_path.unlink(missing_ok=True)
+
+            # No target languages, so no translator: this command never
+            # translates. --output names the one file it does write.
+            result = run_pipeline(
+                video,
+                config,
+                transcriber=transcriber,
+                target_languages=[],
+                output_dir=output.parent if output else video.parent,
+                source_language=language,
+                keep_original=True,
+                original_output_path=output,
+                timestamp_mode=timestamp_mode,
+                split_sentences=split_sentences,
+                post_process=post_process,
+                vad_parameters=build_vad_parameters(config),
+                hooks=PipelineHooks(
+                    on_audio_extracted=hook_audio_extracted,
+                    on_transcribe_complete=hook_transcribe_complete,
+                    on_original_saved=hook_original_saved,
+                ),
+            )
 
             transcriber.unload_model()
 
         print_success(
             f"Transcription complete!\n"
-            f"  Detected language: {info.language} ({info.language_probability:.1%})\n"
-            f"  Segments: {len(segments)}\n"
-            f"  Output: {output}"
+            f"  Detected language: {result.detected_language} "
+            f"({result.language_probability:.1%})\n"
+            f"  Segments: {result.segment_count}\n"
+            f"  Output: {result.outputs[0].path}"
         )
 
     except Exception as e:
