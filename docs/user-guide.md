@@ -521,6 +521,13 @@ subtitle-forge batch <directory> -t <target_lang> [options]
 | `--workers` | `-w` | 并发数（默认取配置 `max_workers`，即 2；上限 4） |
 | `--file-list` | - | 从文件列表读取 |
 | `--output-dir` | `-o` | 输出目录 |
+| `--whisper-model` | - | Whisper 模型 |
+| `--ollama-model` | - | Ollama 模型 |
+| `--keep-original / --no-keep-original` | - | 保留/不保留原语言字幕 |
+| `--bilingual / --no-bilingual` | - | 生成双语字幕 |
+| `--timestamp-mode` | - | 后处理模式 |
+| `--split-sentences / --no-split-sentences` | - | 按句子拆分多句字幕 |
+| `--save-debug-log` | - | 保存调试日志（每个视频一个 `{文件名}_debug/`，此时逐个处理） |
 
 **示例**：
 
@@ -533,6 +540,9 @@ subtitle-forge batch ./videos/ -t zh -r --workers 4
 
 # 从列表文件处理
 subtitle-forge batch --file-list files.txt -t zh
+
+# 双语字幕
+subtitle-forge batch ./videos/ -t zh --bilingual
 ```
 
 ---

@@ -7,7 +7,8 @@ and gets a quiet, side-effect-free run.
 
 Caller responsibilities:
 - Build the Transcriber and ensure its Whisper model is cached locally.
-- Build the SubtitleTranslator and ensure its Ollama model is available.
+- Build the SubtitleTranslator and ensure its Ollama model is available,
+  unless target_languages is empty (transcribe-only runs pass none).
 - Provide an output_dir that exists.
 - Clean up Transcriber state if needed (e.g. unload_model()).
 
@@ -152,11 +153,12 @@ def run_pipeline(
     config: AppConfig,
     *,
     transcriber: Transcriber,
-    translator: SubtitleTranslator,
     target_languages: List[str],
     output_dir: Path,
+    translator: Optional[SubtitleTranslator] = None,
     source_language: Optional[str] = None,
     keep_original: bool = True,
+    original_output_path: Optional[Path] = None,
     bilingual: bool = False,
     timestamp_mode: Optional[str] = None,
     split_sentences: Optional[bool] = None,
@@ -169,6 +171,16 @@ def run_pipeline(
     See module docstring for caller responsibilities. Hooks are optional
     callbacks for progress UI; with hooks=None this runs silently (server
     mode) and produces no console output of its own.
+
+    Args:
+        translator: Required unless target_languages is empty.
+        original_output_path: Exact path for the original-language subtitle
+            file, for callers that let the user name it. Default None derives
+            it from output_dir; translation outputs always do.
+
+    Raises:
+        ValueError: target_languages is non-empty and translator is None, or a
+            language code is not filename-safe.
     """
     hooks = hooks or PipelineHooks()
     extractor = AudioExtractor()
@@ -181,6 +193,11 @@ def run_pipeline(
     target_languages = normalize_target_languages(target_languages)
     if source_language:
         validate_language_codes([source_language])
+
+    if target_languages and translator is None:
+        raise ValueError(
+            "run_pipeline needs a translator when target_languages is non-empty"
+        )
 
     audio_path = extractor.extract(video_path)
     try:
@@ -211,7 +228,9 @@ def run_pipeline(
         outputs: List[PipelineOutput] = []
 
         if keep_original:
-            original_srt = output_dir / f"{stem}.{detected_language}.srt"
+            original_srt = (
+                original_output_path or output_dir / f"{stem}.{detected_language}.srt"
+            )
             subtitle_processor.save(segments, original_srt)
             outputs.append(
                 PipelineOutput(language=detected_language, path=original_srt)

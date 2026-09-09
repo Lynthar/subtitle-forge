@@ -74,6 +74,26 @@ def batch_process(
         "--keep-original/--no-keep-original",
         help="Keep original language subtitles (default: config output.keep_original)",
     ),
+    bilingual: Optional[bool] = typer.Option(
+        None,
+        "--bilingual/--no-bilingual",
+        help="Generate bilingual subtitles (default: config output.bilingual)",
+    ),
+    timestamp_mode: Optional[str] = typer.Option(
+        None,
+        "--timestamp-mode",
+        help="Timestamp processing mode: off, minimal (default), full",
+    ),
+    split_sentences: Optional[bool] = typer.Option(
+        None,
+        "--split-sentences/--no-split-sentences",
+        help="Split multi-sentence segments using word timestamps for better timing",
+    ),
+    save_debug_log: bool = typer.Option(
+        False,
+        "--save-debug-log",
+        help="Save detailed debug logs and failure reports (creates {video}_debug/ folders)",
+    ),
     file_list: Optional[Path] = typer.Option(
         None,
         "--file-list",
@@ -88,13 +108,13 @@ def batch_process(
         subtitle-forge batch ./videos/ -t zh -t ja --workers 2 --recursive
         subtitle-forge batch --file-list videos.txt -t zh
     """
-    from ...core.audio import AudioExtractor
-    from ...core.pipeline import build_timestamp_config, build_vad_parameters
+    from ...core.pipeline import build_timestamp_config, build_vad_parameters, run_pipeline
     from ...core.transcriber import Transcriber
-    from ...core.translator import SubtitleTranslator, TranslationConfig
-    from ...core.subtitle import SubtitleProcessor, normalize_target_languages
+    from ...core.translator import SubtitleTranslator
+    from ...core.subtitle import normalize_target_languages
     from ...core.queue import run_batch_sync
     from ...models.task import VideoTask
+    from ...utils.logger import setup_logging
     from ...utils.progress import (
         SubtitleProgress,
         print_success,
@@ -109,8 +129,8 @@ def batch_process(
     config = get_config()
 
     try:
-        # Validates for filename safety AND drops duplicate -t values (batch
-        # doesn't go through run_pipeline, so it normalizes here itself).
+        # run_pipeline normalizes again per task; doing it once here turns an
+        # unsafe -t value into one error before any video starts.
         target_lang = normalize_target_languages(target_lang)
     except ValueError as e:
         print_error(str(e))
@@ -121,12 +141,30 @@ def batch_process(
     if workers is None:
         workers = min(max(1, config.max_workers), 4)
 
+    # Logging is process-wide, so concurrent tasks would write into each
+    # other's run.log.
+    if save_debug_log and workers > 1:
+        print_info("--save-debug-log processes one video at a time")
+        workers = 1
+
     # Override config
     if whisper_model:
         config.whisper.model = whisper_model
     if ollama_model:
         config.ollama.model = ollama_model
     keep_original = keep_original if keep_original is not None else config.output.keep_original
+    bilingual = bilingual if bilingual is not None else config.output.bilingual
+
+    # Fail once here rather than once per task on a typo'd --timestamp-mode.
+    try:
+        build_timestamp_config(
+            config,
+            mode_override=timestamp_mode,
+            split_sentences_override=split_sentences,
+        )
+    except ValueError as e:
+        print_error(str(e))
+        raise typer.Exit(1)
 
     # Collect videos
     videos = []
@@ -183,75 +221,50 @@ def batch_process(
         for video in videos
     ]
 
-    # Initialize components (shared across workers for efficiency warning)
-    extractor = AudioExtractor()
-    transcriber = Transcriber(
-        model_name=config.whisper.model,
-        device=config.whisper.device,
-        compute_type=config.whisper.compute_type,
-        download_root=config.whisper.download_root,
-        use_whisperx=config.whisper.use_whisperx,
-        whisperx_align=config.whisper.whisperx_align,
-        hf_token=config.whisper.hf_token,
-        hf_endpoint=config.whisper.hf_endpoint,
-    )
-
-    timestamp_config = build_timestamp_config(config)
+    # One Transcriber shared across workers — its model load is heavy, and a
+    # lock inside serializes the actual inference.
+    transcriber = Transcriber.from_config(config.whisper)
     vad_params = build_vad_parameters(config)
-    translation_config = TranslationConfig(
-        model=config.ollama.model,
-        host=config.ollama.host,
-        temperature=config.ollama.temperature,
-        max_batch_size=config.ollama.max_batch_size,
-        max_retries=config.ollama.max_retries,
-        request_timeout=config.ollama.request_timeout,
-        prompt_template=config.ollama.prompt_template,
-        prompt_template_id=config.ollama.prompt_template_id,
-    )
-    subtitle_processor = SubtitleProcessor(encoding=config.output.encoding)
 
     def process_task(task: VideoTask) -> None:
         """Process a single video task."""
+        failed_log_path = None
+        if save_debug_log:
+            debug_dir = task.output_dir / f"{task.video_path.stem}_debug"
+            debug_dir.mkdir(exist_ok=True)
+            failed_log_path = str(debug_dir / "translation_failures.json")
+            # console_level="INFO" keeps third-party DEBUG stack traces out of
+            # the terminal while the file still captures everything.
+            setup_logging("DEBUG", str(debug_dir / "run.log"), console_level="INFO")
+
         # Fresh translator per task: it carries per-run failure tracking that
         # workers sharing one instance would clear out from under each other.
-        # The Transcriber is shared — its model load is heavy, and a lock serializes it.
-        translator = SubtitleTranslator(translation_config)
+        translator = SubtitleTranslator.from_config(
+            config.ollama,
+            save_failed_log=save_debug_log,
+            failed_log_path=failed_log_path,
+        )
 
-        # Extract audio
-        audio_path = extractor.extract(task.video_path)
+        result = run_pipeline(
+            task.video_path,
+            config,
+            transcriber=transcriber,
+            translator=translator,
+            target_languages=task.target_langs,
+            output_dir=task.output_dir,
+            keep_original=task.options.get("keep_original", True),
+            bilingual=bilingual,
+            timestamp_mode=timestamp_mode,
+            split_sentences=split_sentences,
+            vad_parameters=vad_params,
+        )
 
-        try:
-            # Transcribe
-            segments, info = transcriber.transcribe(
-                audio_path,
-                beam_size=config.whisper.beam_size,
-                vad_filter=config.whisper.vad_filter,
-                batch_size=config.whisper.batch_size,
-                vad_parameters=vad_params,
-                post_process=config.timestamp.enabled,
-                timestamp_config=timestamp_config,
-            )
-            task.source_lang = info.language
-
-            # Save original
-            if task.options.get("keep_original", True):
-                original_srt = task.output_dir / f"{task.video_path.stem}.{info.language}.srt"
-                subtitle_processor.save(segments, original_srt)
-                task.original_srt = original_srt
-
-            # Translate to each target language
-            for lang in task.target_langs:
-                if lang == info.language:
-                    continue
-
-                translated = translator.translate(segments, info.language, lang)
-                output_path = task.output_dir / f"{task.video_path.stem}.{lang}.srt"
-                subtitle_processor.save(translated, output_path)
-                task.translated_srts[lang] = output_path
-
-        finally:
-            # Cleanup audio
-            audio_path.unlink(missing_ok=True)
+        task.source_lang = result.detected_language
+        for produced in result.outputs:
+            if produced.language == result.detected_language:
+                task.original_srt = produced.path
+            else:
+                task.translated_srts[produced.language] = produced.path
 
     # Progress tracking
     progress = SubtitleProgress()

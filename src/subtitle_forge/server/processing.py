@@ -16,7 +16,7 @@ from typing import Optional
 
 from ..core.pipeline import build_vad_parameters, run_pipeline
 from ..core.transcriber import Transcriber
-from ..core.translator import SubtitleTranslator, TranslationConfig
+from ..core.translator import SubtitleTranslator
 from ..models.config import AppConfig
 from .jobs import Job
 
@@ -45,16 +45,7 @@ class TranscriberHolder:
                 return self._transcriber
             cfg = self._config.whisper
             logger.info("Loading Whisper model %s on %s", cfg.model, cfg.device)
-            t = Transcriber(
-                model_name=cfg.model,
-                device=cfg.device,
-                compute_type=cfg.compute_type,
-                download_root=cfg.download_root,
-                use_whisperx=cfg.use_whisperx,
-                whisperx_align=cfg.whisperx_align,
-                hf_token=cfg.hf_token,
-                hf_endpoint=cfg.hf_endpoint,
-            )
+            t = Transcriber.from_config(cfg)
             if not t.is_model_cached():
                 # Server should not run interactive download. Fail with a
                 # clear instruction instead.
@@ -83,18 +74,7 @@ def make_processor(config: AppConfig, holder: TranscriberHolder):
 def _run_job(job: Job, config: AppConfig, transcriber: Transcriber) -> list:
     video_path = Path(job.video_path)
 
-    translator = SubtitleTranslator(
-        TranslationConfig(
-            model=config.ollama.model,
-            host=config.ollama.host,
-            temperature=config.ollama.temperature,
-            max_batch_size=config.ollama.max_batch_size,
-            max_retries=config.ollama.max_retries,
-            request_timeout=config.ollama.request_timeout,
-            prompt_template=config.ollama.prompt_template,
-            prompt_template_id=config.ollama.prompt_template_id,
-        )
-    )
+    translator = SubtitleTranslator.from_config(config.ollama)
 
     vad_params = build_vad_parameters(config)
 

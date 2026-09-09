@@ -18,20 +18,10 @@ console = Console()
 
 
 def _build_transcriber(whisper_cfg) -> "Transcriber":
-    """A Transcriber honouring the configured cache/mirror/token settings.
-
-    The wizard used to build bare Transcriber(model_name=...) instances: with
-    a custom download_root the cache check looked in the wrong directory and
-    the download wrote to the wrong one, so the model was fetched twice.
-    """
+    """A Transcriber honouring the configured cache/mirror/token settings."""
     from ..core.transcriber import Transcriber
 
-    return Transcriber(
-        model_name=whisper_cfg.model,
-        download_root=whisper_cfg.download_root,
-        hf_token=whisper_cfg.hf_token,
-        hf_endpoint=whisper_cfg.hf_endpoint,
-    )
+    return Transcriber.from_config(whisper_cfg)
 
 
 def check_whisper_model(whisper_cfg) -> bool:

@@ -45,7 +45,7 @@ def translate_subtitle(
         subtitle-forge translate video.en.srt --target-lang zh
         subtitle-forge translate video.srt -s en -t zh --bilingual
     """
-    from ...core.translator import SubtitleTranslator, TranslationConfig
+    from ...core.translator import SubtitleTranslator
     from ...core.subtitle import SubtitleProcessor, validate_language_codes
     from ...utils.progress import SubtitleProgress, print_success, print_error, print_info
     from ..app import get_config
@@ -110,17 +110,8 @@ def translate_subtitle(
 
             # 2. Translate
             tracker.set_description("Translating...")
-            translator = SubtitleTranslator(
-                TranslationConfig(
-                    model=model or config.ollama.model,
-                    host=config.ollama.host,
-                    temperature=config.ollama.temperature,
-                    max_batch_size=config.ollama.max_batch_size,
-                    max_retries=config.ollama.max_retries,
-                    request_timeout=config.ollama.request_timeout,
-                    prompt_template=config.ollama.prompt_template,
-                    prompt_template_id=config.ollama.prompt_template_id,
-                )
+            translator = SubtitleTranslator.from_config(
+                config.ollama, model=model or config.ollama.model
             )
 
             translated = translator.translate(segments, source_lang, target_lang)

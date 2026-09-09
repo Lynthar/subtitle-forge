@@ -14,6 +14,7 @@ import threading
 
 from faster_whisper import WhisperModel, BatchedInferencePipeline
 
+from ..models.config import WhisperConfig
 from ..models.subtitle import SubtitleSegment, WordTiming
 from ..utils.gpu import get_optimal_compute_type, get_available_vram
 from ..exceptions import TranscriptionError
@@ -171,6 +172,33 @@ class Transcriber:
         # Serializes transcription when one Transcriber is shared across threads (batch does this):
         # CTranslate2 inference and the lazy model loads are not concurrency-safe on one instance.
         self._transcribe_lock = threading.Lock()
+
+    @classmethod
+    def from_config(cls, cfg: WhisperConfig, **overrides) -> "Transcriber":
+        """Build a Transcriber from the `whisper` config section — every one, not
+        just some: a partial build looks in the wrong cache directory and ignores
+        the configured mirror, so the model gets downloaded a second time.
+
+        Args:
+            cfg: The whisper section of AppConfig.
+            **overrides: Any __init__ keyword whose configured value the
+                caller replaces (e.g. model_name from --model).
+
+        Raises:
+            TypeError: An override that is not an __init__ keyword.
+        """
+        kwargs = {
+            "model_name": cfg.model,
+            "device": cfg.device,
+            "compute_type": cfg.compute_type,
+            "download_root": cfg.download_root,
+            "use_whisperx": cfg.use_whisperx,
+            "whisperx_align": cfg.whisperx_align,
+            "hf_token": cfg.hf_token,
+            "hf_endpoint": cfg.hf_endpoint,
+        }
+        kwargs.update(overrides)
+        return cls(**kwargs)
 
     @classmethod
     def select_optimal_model(cls, prefer_large: bool = True) -> str:

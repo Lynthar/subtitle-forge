@@ -307,10 +307,7 @@ def check(
     try:
         from ...core.transcriber import Transcriber
 
-        transcriber = Transcriber(
-            model_name=config.whisper.model,
-            download_root=config.whisper.download_root,
-        )
+        transcriber = Transcriber.from_config(config.whisper)
         if transcriber.is_model_cached():
             console.print(f"  [green]Model:[/green] {config.whisper.model} (ready)")
         else:
@@ -477,21 +474,24 @@ def show_prompt():
     from ...core.translator import SubtitleTranslator
 
     config = _load_config()
+    translator = SubtitleTranslator.from_config(config.ollama)
+    prompt = translator.get_prompt_template()
+    source = translator.get_prompt_template_info()
 
-    if config.ollama.prompt_template:
-        console.print(Panel(
-            "[cyan]Custom Prompt Template[/cyan]\n\n"
-            f"{config.ollama.prompt_template}",
-            title="Translation Prompt",
-            border_style="cyan",
-        ))
+    # A dangling template id resolves to the default, so label what is
+    # actually shown rather than what the config asked for.
+    if source is None or prompt == translator.DEFAULT_PROMPT_TEMPLATE:
+        header, border = "[dim](Using default prompt)[/dim]", "blue"
+    elif source == "custom":
+        header, border = "[cyan]Custom Prompt Template[/cyan]", "cyan"
     else:
-        console.print(Panel(
-            "[dim](Using default prompt)[/dim]\n\n"
-            f"{SubtitleTranslator.DEFAULT_PROMPT_TEMPLATE}",
-            title="Translation Prompt",
-            border_style="blue",
-        ))
+        header, border = f"[cyan]{source}[/cyan]", "cyan"
+
+    console.print(Panel(
+        f"{header}\n\n{prompt}",
+        title="Translation Prompt",
+        border_style=border,
+    ))
 
     console.print("\n[bold]Available placeholders:[/bold]")
     console.print("  {source_lang}    - Source language name")
@@ -565,8 +565,12 @@ def reset_prompt():
     """
     config = _load_config()
 
-    if config.ollama.prompt_template:
+    # Both fields, not just the custom one: after `config use-prompt <id>` the
+    # custom prompt is already None, so clearing it alone left the library
+    # template selected while reporting a reset.
+    if config.ollama.prompt_template or config.ollama.prompt_template_id:
         config.ollama.prompt_template = None
+        config.ollama.prompt_template_id = None
         config.save(_active_config_path())
         print_success("Translation prompt reset to default")
     else:
@@ -593,7 +597,7 @@ def export_prompt(
     from ...core.translator import SubtitleTranslator
 
     config = _load_config()
-    prompt = config.ollama.prompt_template or SubtitleTranslator.DEFAULT_PROMPT_TEMPLATE
+    prompt = SubtitleTranslator.from_config(config.ollama).get_prompt_template()
 
     try:
         output.write_text(prompt, encoding="utf-8")

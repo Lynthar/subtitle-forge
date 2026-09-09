@@ -10,6 +10,7 @@ import time
 import ollama
 from ollama import Client, ResponseError
 
+from ..models.config import OllamaConfig
 from ..models.subtitle import SubtitleSegment
 from ..exceptions import TranslationError
 from .model_manager import OllamaModelManager, DownloadProgress
@@ -57,25 +58,6 @@ OUTPUT — return STRICTLY a JSON object of the form:
 
 Do not include any text outside the JSON object. Do not omit any indices. Do not renumber.
 """
-
-    # Legacy [N]-line prompt — kept for prompt_library templates that still
-    # rely on the original format. Available placeholders are the same set:
-    # {source_lang}, {target_lang}, {context_before}, {segments}, {context_after}
-    LEGACY_PROMPT_TEMPLATE = """You are an expert subtitle translator for movies and TV dramas.
-
-TRANSLATION GUIDELINES:
-1. Preserve natural dialogue flow and conversational tone
-2. Capture emotional nuance, character voice, and speaker intent
-3. Use appropriate register (formal/informal) based on context
-4. Keep translations concise for subtitle readability
-5. Maintain consistency with surrounding dialogue
-6. Preserve the [number] prefix for each line
-7. Output ONLY the translated lines, no explanations
-{context_before}
-TRANSLATE THESE LINES from {source_lang} to {target_lang}:
-{segments}
-{context_after}
-Translated subtitles:"""
 
     LANGUAGE_NAMES = {
         "zh": "Simplified Chinese",
@@ -144,6 +126,33 @@ Translated subtitles:"""
         self._model_manager: Optional[OllamaModelManager] = None
         self._failed_translations: List[dict] = []  # Track failed translations
         self._batch_failure_indices: dict = {}  # Track failed indices per reason for compressed logging
+
+    @classmethod
+    def from_config(cls, cfg: OllamaConfig, **overrides) -> "SubtitleTranslator":
+        """Build a translator from the `ollama` config section. Both prompt fields
+        travel together: dropping prompt_template_id leaves the translator on the
+        default JSON prompt while the config says a library template is selected.
+
+        Args:
+            cfg: The ollama section of AppConfig.
+            **overrides: Any TranslationConfig field the caller replaces
+                (e.g. save_failed_log / failed_log_path from --save-failed-log).
+
+        Raises:
+            TypeError: An override that is not a TranslationConfig field.
+        """
+        kwargs = {
+            "model": cfg.model,
+            "host": cfg.host,
+            "temperature": cfg.temperature,
+            "max_batch_size": cfg.max_batch_size,
+            "max_retries": cfg.max_retries,
+            "request_timeout": cfg.request_timeout,
+            "prompt_template": cfg.prompt_template,
+            "prompt_template_id": cfg.prompt_template_id,
+        }
+        kwargs.update(overrides)
+        return cls(TranslationConfig(**kwargs))
 
     @property
     def client(self) -> Client:

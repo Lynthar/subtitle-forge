@@ -221,7 +221,7 @@ def process(
         subtitle-forge process video.mp4 -t zh -t ja --bilingual
     """
     from ..core.transcriber import Transcriber
-    from ..core.translator import SubtitleTranslator, TranslationConfig
+    from ..core.translator import SubtitleTranslator
     from ..utils.progress import (
         SubtitleProgress,
         TranslationProgressTracker,
@@ -241,6 +241,17 @@ def process(
     if ollama_model:
         cfg.ollama.model = ollama_model
     if prompt_template:
+        # Reject an unknown id here, not after the GPU run: it leaves JSON mode
+        # off (id is set) while resolving to the default prompt, so the whole
+        # translation runs on the least reliable parse path.
+        from ..core.prompt_library import get_prompt_library
+
+        if get_prompt_library().get_template(prompt_template) is None:
+            print_error(f"Prompt template not found: {prompt_template}")
+            console.print(
+                "\n[dim]Use 'config list-prompts' to see available templates[/dim]"
+            )
+            raise typer.Exit(1)
         cfg.ollama.prompt_template_id = prompt_template
 
     output_dir = output_dir or video.parent
@@ -284,14 +295,9 @@ def process(
         # Determine HuggingFace endpoint (CLI option takes precedence)
         hf_endpoint = hf_mirror or cfg.whisper.hf_endpoint
 
-        transcriber = Transcriber(
-            model_name=cfg.whisper.model,
-            device=cfg.whisper.device,
-            compute_type=cfg.whisper.compute_type,
-            download_root=cfg.whisper.download_root,
+        transcriber = Transcriber.from_config(
+            cfg.whisper,
             use_whisperx=whisperx_enabled,
-            whisperx_align=cfg.whisper.whisperx_align,
-            hf_token=cfg.whisper.hf_token,
             hf_endpoint=hf_endpoint,
         )
 
@@ -354,19 +360,10 @@ def process(
         else:
             failed_log_path = None
 
-        translator = SubtitleTranslator(
-            TranslationConfig(
-                model=cfg.ollama.model,
-                host=cfg.ollama.host,
-                temperature=cfg.ollama.temperature,
-                max_batch_size=cfg.ollama.max_batch_size,
-                max_retries=cfg.ollama.max_retries,
-                request_timeout=cfg.ollama.request_timeout,
-                prompt_template=cfg.ollama.prompt_template,
-                prompt_template_id=cfg.ollama.prompt_template_id,
-                save_failed_log=effective_save_failed_log,
-                failed_log_path=failed_log_path,
-            )
+        translator = SubtitleTranslator.from_config(
+            cfg.ollama,
+            save_failed_log=effective_save_failed_log,
+            failed_log_path=failed_log_path,
         )
 
         # Check and download translation model if needed (separate progress bar)
