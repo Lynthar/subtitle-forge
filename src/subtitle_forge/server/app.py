@@ -93,13 +93,16 @@ def create_app(
                 detail=f"Job queue is full ({max_pending} pending); retry later",
             )
 
+        keep_original, bilingual = config.output.resolve_flags(
+            keep_original=payload.keep_original, bilingual=payload.bilingual
+        )
         job = Job(
             job_id=new_job_id(),
             video_path=payload.video_path,
             target_languages=payload.target_languages,
             source_language=payload.source_language,
-            bilingual=payload.bilingual,
-            keep_original=payload.keep_original,
+            bilingual=bilingual,
+            keep_original=keep_original,
         )
         await runner.submit(job)
         return JobAccepted(job_id=job.job_id, status=job.status)

@@ -596,7 +596,7 @@ subtitle-forge translate <subtitle> -t <target_lang> [options]
 | `--target-lang` | `-t` | 目标语言（必需） |
 | `--source-lang` | `-s` | 源语言 |
 | `--output` | `-o` | 输出文件路径 |
-| `--bilingual` | - | 生成双语字幕 |
+| `--bilingual / --no-bilingual` | - | 生成双语字幕（默认取配置 `output.bilingual`） |
 
 **示例**：
 
@@ -716,6 +716,9 @@ subtitle-forge serve --host 0.0.0.0 --port 8765
   "keep_original": true
 }
 ```
+
+`bilingual` 与 `keep_original` 可以省略：省略时取服务端配置文件里的 `output.bilingual` / `output.keep_original`，
+与命令行的 `process` 一致。
 
 提交时就会做校验，**不合规立刻返回错误，不会等到几分钟后 worker 跑起来才失败**：
 

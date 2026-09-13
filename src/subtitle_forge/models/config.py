@@ -5,7 +5,7 @@ import sys
 import tempfile
 from pathlib import Path
 from dataclasses import dataclass, field, asdict
-from typing import Optional
+from typing import Optional, Tuple
 
 import yaml
 
@@ -79,6 +79,16 @@ class OutputConfig:
     keep_original: bool = True
     bilingual: bool = False
     original_on_top: bool = True
+
+    def resolve_flags(
+        self, *, keep_original: Optional[bool], bilingual: Optional[bool]
+    ) -> Tuple[bool, bool]:
+        """(keep_original, bilingual) with None meaning "as configured". Every entry path
+        resolves through here, so the output section applies to all of them."""
+        return (
+            self.keep_original if keep_original is None else keep_original,
+            self.bilingual if bilingual is None else bilingual,
+        )
 
 
 @dataclass

@@ -12,6 +12,7 @@ contract.
 """
 
 from pathlib import Path
+from typing import ClassVar
 
 import pytest
 from typer.testing import CliRunner
@@ -59,12 +60,20 @@ class _FakeTranscriber:
 
 
 class _FakeTranslator:
+    LANGUAGE_NAMES: ClassVar[dict] = {}
+
     def __init__(self, *args, **kwargs):
         pass
 
     @classmethod
     def from_config(cls, cfg, **overrides):
         return cls()
+
+    def check_model_available(self):
+        return True
+
+    def effective_batch_size(self):
+        return 10
 
     def translate(self, segments, source_lang, target_lang, progress_callback=None):
         return [
@@ -97,6 +106,12 @@ def _video(tmp_path, name="clip.mp4"):
 
 def _run(tmp_path, *args):
     return runner.invoke(app, ["--config", str(tmp_path / "config.yaml"), *args])
+
+
+def _configure_bilingual_only(tmp_path):
+    (tmp_path / "config.yaml").write_text(
+        "output:\n  keep_original: false\n  bilingual: true\n", encoding="utf-8"
+    )
 
 
 def test_transcribe_writes_the_output_path_it_was_given(tmp_path, monkeypatch):
@@ -165,6 +180,50 @@ def test_batch_honours_bilingual(tmp_path, monkeypatch):
     merged = (videos / "a.en-zh.srt").read_text(encoding="utf-8")
     assert "Hello there" in merged and "[zh] Hello there" in merged
     assert not (videos / "a.zh.srt").exists()
+
+
+def test_process_falls_back_to_config_output_flags(tmp_path, monkeypatch):
+    _fake_components(monkeypatch)
+    _configure_bilingual_only(tmp_path)
+    video = _video(tmp_path)
+
+    result = _run(tmp_path, "process", str(video), "-t", "zh")
+
+    assert result.exit_code == 0, result.output
+    assert "[zh] Hello there" in (tmp_path / "clip.en-zh.srt").read_text(encoding="utf-8")
+    assert not (tmp_path / "clip.en.srt").exists()
+
+
+def test_batch_falls_back_to_config_output_flags(tmp_path, monkeypatch):
+    _fake_components(monkeypatch)
+    _configure_bilingual_only(tmp_path)
+    videos = tmp_path / "videos"
+    videos.mkdir()
+    _video(videos, "a.mp4")
+
+    result = _run(tmp_path, "batch", str(videos), "-t", "zh")
+
+    assert result.exit_code == 0, result.output
+    assert "[zh] Hello there" in (videos / "a.en-zh.srt").read_text(encoding="utf-8")
+    assert not (videos / "a.en.srt").exists()
+
+
+def test_translate_falls_back_to_config_bilingual(tmp_path, monkeypatch):
+    _fake_components(monkeypatch)
+    _configure_bilingual_only(tmp_path)
+    srt = tmp_path / "clip.en.srt"
+    srt.write_text("1\n00:00:00,000 --> 00:00:01,500\nHello there\n", encoding="utf-8")
+
+    result = _run(tmp_path, "translate", str(srt), "-t", "zh")
+
+    assert result.exit_code == 0, result.output
+    merged = (tmp_path / "clip.en-zh.srt").read_text(encoding="utf-8")
+    assert "Hello there" in merged and "[zh] Hello there" in merged
+
+    result = _run(tmp_path, "translate", str(srt), "-t", "zh", "--no-bilingual")
+
+    assert result.exit_code == 0, result.output
+    assert "[zh] Hello there" in (tmp_path / "clip.zh.srt").read_text(encoding="utf-8")
 
 
 def test_batch_rejects_an_invalid_timestamp_mode_before_transcribing(

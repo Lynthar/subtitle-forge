@@ -152,8 +152,9 @@ def batch_process(
         config.whisper.model = whisper_model
     if ollama_model:
         config.ollama.model = ollama_model
-    keep_original = keep_original if keep_original is not None else config.output.keep_original
-    bilingual = bilingual if bilingual is not None else config.output.bilingual
+    keep_original, bilingual = config.output.resolve_flags(
+        keep_original=keep_original, bilingual=bilingual
+    )
 
     # Fail once here rather than once per task on a typo'd --timestamp-mode.
     try:
@@ -214,9 +215,6 @@ def batch_process(
             video_path=video,
             target_langs=list(target_lang),
             output_dir=output_dir or video.parent,
-            options={
-                "keep_original": keep_original,
-            },
         )
         for video in videos
     ]
@@ -252,7 +250,7 @@ def batch_process(
             translator=translator,
             target_languages=task.target_langs,
             output_dir=task.output_dir,
-            keep_original=task.options.get("keep_original", True),
+            keep_original=keep_original,
             bilingual=bilingual,
             timestamp_mode=timestamp_mode,
             split_sentences=split_sentences,

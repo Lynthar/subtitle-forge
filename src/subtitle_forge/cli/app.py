@@ -255,10 +255,9 @@ def process(
         cfg.ollama.prompt_template_id = prompt_template
 
     output_dir = output_dir or video.parent
-    # Fall back to config when the flag wasn't passed (typer default None), so
-    # output.keep_original / output.bilingual in config.yaml actually take effect.
-    keep_original = keep_original if keep_original is not None else cfg.output.keep_original
-    bilingual = bilingual if bilingual is not None else cfg.output.bilingual
+    keep_original, bilingual = cfg.output.resolve_flags(
+        keep_original=keep_original, bilingual=bilingual
+    )
     progress = SubtitleProgress()
 
     # Handle --save-debug-log option

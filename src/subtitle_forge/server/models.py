@@ -14,8 +14,9 @@ class JobRequest(BaseModel):
     # video — cap the count so a single request can't queue unbounded work.
     target_languages: List[str] = Field(..., min_length=1, max_length=10)
     source_language: Optional[str] = Field(None, description="ISO 639-1 code; null = auto-detect")
-    bilingual: bool = False
-    keep_original: bool = True
+    # null = the server's configured output.bilingual / output.keep_original.
+    bilingual: Optional[bool] = None
+    keep_original: Optional[bool] = None
 
     @field_validator("target_languages", "source_language")
     @classmethod

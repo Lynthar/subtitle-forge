@@ -9,7 +9,6 @@ Caller responsibilities:
 - Build the Transcriber and ensure its Whisper model is cached locally.
 - Build the SubtitleTranslator and ensure its Ollama model is available,
   unless target_languages is empty (transcribe-only runs pass none).
-- Provide an output_dir that exists.
 - Clean up Transcriber state if needed (e.g. unload_model()).
 
 The pipeline cleans up its own audio scratch file in a finally block.

@@ -32,10 +32,10 @@ def translate_subtitle(
         "-m",
         help="Ollama model name",
     ),
-    bilingual: bool = typer.Option(
-        False,
-        "--bilingual",
-        help="Generate bilingual subtitles",
+    bilingual: Optional[bool] = typer.Option(
+        None,
+        "--bilingual/--no-bilingual",
+        help="Generate bilingual subtitles (default: config output.bilingual)",
     ),
 ):
     """
@@ -82,6 +82,8 @@ def translate_subtitle(
             f"Target language '{target_lang}' is the same as the source — nothing to translate."
         )
         raise typer.Exit(1)
+
+    _, bilingual = config.output.resolve_flags(keep_original=None, bilingual=bilingual)
 
     # Output path
     if output is None:
