@@ -81,7 +81,7 @@ def transcribe_video(
         print_success,
         print_error,
         print_info,
-        progress_disabled,
+        download_whisper_with_progress,
     )
     from ...utils.logger import setup_logging
     from ..app import get_config
@@ -129,47 +129,10 @@ def transcribe_video(
 
         # Check and download Whisper model if needed (separate progress bar)
         if not transcriber.is_model_cached():
-            from rich.progress import Progress, SpinnerColumn, BarColumn, TextColumn, DownloadColumn
-            import logging
-
             model_size_mb = transcriber.get_model_size() / (1024 * 1024)
             console.print(f"\n[cyan]Downloading Whisper model: {model_name}[/cyan]")
             console.print(f"[dim]Model size: ~{model_size_mb:.0f}MB (one-time download)[/dim]\n")
-
-            # Suppress logs during download to avoid interfering with progress bar
-            hf_logger = logging.getLogger("huggingface_hub")
-            sf_logger = logging.getLogger("subtitle_forge")
-            original_hf_level = hf_logger.level
-            original_sf_level = sf_logger.level
-            hf_logger.setLevel(logging.ERROR)
-            sf_logger.setLevel(logging.ERROR)
-
-            try:
-                with Progress(
-                    SpinnerColumn(),
-                    TextColumn("[bold blue]{task.description}"),
-                    BarColumn(bar_width=40),
-                    TextColumn("[progress.percentage]{task.percentage:>3.1f}%"),
-                    DownloadColumn(),
-                    console=console,
-                    disable=progress_disabled(),
-                ) as dl_progress:
-                    dl_task = dl_progress.add_task("Downloading...", total=transcriber.get_model_size())
-                    last_completed = 0
-
-                    def update_whisper_download(downloaded: int, total: int):
-                        nonlocal last_completed
-                        # Only update completed, not total (avoid accumulation bug)
-                        if downloaded > last_completed:
-                            dl_progress.update(dl_task, completed=downloaded)
-                            last_completed = downloaded
-
-                    transcriber.ensure_model_downloaded(progress_callback=update_whisper_download)
-            finally:
-                # Restore log levels
-                hf_logger.setLevel(original_hf_level)
-                sf_logger.setLevel(original_sf_level)
-
+            download_whisper_with_progress(transcriber)
             print_info("Whisper model downloaded successfully!\n")
 
         # ========== Phase 2: Main processing (single progress bar) ==========

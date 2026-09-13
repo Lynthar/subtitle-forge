@@ -5,6 +5,7 @@ from typing import List, Optional, Tuple
 import logging
 import re
 
+from ..models.config import TimestampConfig
 from ..models.subtitle import SubtitleSegment, WordTiming
 
 logger = logging.getLogger(__name__)
@@ -59,63 +60,35 @@ class TimestampProcessor:
         "vs.", "etc.", "e.g.", "i.e.", "no.", "a.m.", "p.m.", "u.s.",
     })
 
-    def __init__(
-        self,
-        mode: str = "minimal",
-        language: Optional[str] = None,
-        min_duration: float = 1.0,
-        max_duration: float = 8.0,
-        min_gap: float = 0.05,
-        max_gap_warning: float = 10.0,
-        chars_per_second: float = 15.0,
-        cjk_chars_per_second: float = 10.0,
-        split_threshold: int = 30,
-        split_long_segments: bool = True,
-        extend_end_times: bool = True,
-        split_sentences: bool = False,
-        lead_in_ms: int = 80,
-        linger_ms: int = 300,
-    ):
+    def __init__(self, config: TimestampConfig, language: Optional[str] = None):
         """
         Initialize timestamp processor.
 
         Args:
-            mode: Processing mode - "off", "minimal", or "full".
+            config: The timestamp section of AppConfig; `enabled` is for the caller to honour.
             language: Detected language code for CJK optimization.
-            min_duration: Minimum subtitle duration in seconds.
-            max_duration: Maximum subtitle duration in seconds.
-            min_gap: Minimum gap between subtitles in seconds.
-            max_gap_warning: Gap threshold for potential missed speech warning.
-            chars_per_second: Reading speed for Western languages.
-            cjk_chars_per_second: Reading speed for CJK languages.
-            split_threshold: Minimum characters before attempting split.
-            split_long_segments: Split segments containing multiple sentences (full mode only).
-            extend_end_times: Extend end times based on text length (full mode only).
-            split_sentences: Split segments by sentences using word-level timestamps.
         """
-        self.mode = mode
+        self.mode = config.mode
         self.language = language
-        self.min_duration = min_duration
-        self.max_duration = max_duration
-        self.min_gap = min_gap
-        self.max_gap_warning = max_gap_warning
-        self.chars_per_second = chars_per_second
-        self.cjk_chars_per_second = cjk_chars_per_second
-        self.split_threshold = split_threshold
-        self.split_long_segments = split_long_segments
-        self.extend_end_times = extend_end_times
-        self.split_sentences = split_sentences
-        self.lead_in_ms = lead_in_ms
-        self.linger_ms = linger_ms
+        self.min_duration = config.min_duration
+        self.max_duration = config.max_duration
+        self.min_gap = config.min_gap
+        self.max_gap_warning = config.max_gap_warning
+        self.chars_per_second = config.chars_per_second
+        self.cjk_chars_per_second = config.cjk_chars_per_second
+        self.split_threshold = config.split_threshold
+        self.split_sentences = config.split_sentences
+        self.lead_in_ms = config.lead_in_ms
+        self.linger_ms = config.linger_ms
         self._issues: List[TimestampIssue] = []
         self._gaps: List[GapInfo] = []
 
         # Select effective reading speed based on language
         if self._is_cjk_language(language):
-            self._effective_cps = cjk_chars_per_second
-            logger.debug(f"Using CJK reading speed: {cjk_chars_per_second} chars/sec")
+            self._effective_cps = config.cjk_chars_per_second
+            logger.debug(f"Using CJK reading speed: {config.cjk_chars_per_second} chars/sec")
         else:
-            self._effective_cps = chars_per_second
+            self._effective_cps = config.chars_per_second
 
     @classmethod
     def _is_cjk_language(cls, language: Optional[str]) -> bool:
@@ -188,11 +161,8 @@ class TimestampProcessor:
         logger.debug("Timestamp processing mode: full")
 
         # 0. Pre-processing for segments without word-level timestamps
-        if self.split_long_segments:
-            segments = self._split_multi_sentence_segments(segments)
-
-        if self.extend_end_times:
-            segments = self._extend_segment_end_times(segments)
+        segments = self._split_multi_sentence_segments(segments)
+        segments = self._extend_segment_end_times(segments)
 
         # 1. Validate and record issues
         self._validate(segments, audio_duration)

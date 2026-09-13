@@ -1,7 +1,7 @@
 """Interactive setup wizard for first-time users."""
 
 import shutil
-from typing import TYPE_CHECKING, Optional, Callable
+from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
     from ..core.transcriber import Transcriber
@@ -9,9 +9,14 @@ if TYPE_CHECKING:
 import typer
 from rich.console import Console
 from rich.panel import Panel
-from rich.progress import Progress, SpinnerColumn, BarColumn, TextColumn, DownloadColumn
 
-from .progress import print_success, print_error, print_info, print_warning
+from .progress import (
+    download_whisper_with_progress,
+    print_error,
+    print_info,
+    print_warning,
+    pull_ollama_with_progress,
+)
 from ..models.config import AppConfig
 
 console = Console()
@@ -29,48 +34,11 @@ def check_whisper_model(whisper_cfg) -> bool:
     return _build_transcriber(whisper_cfg).is_model_cached()
 
 
-def download_whisper_model(
-    whisper_cfg,
-    progress_callback: Optional[Callable[[int, int], None]] = None,
-) -> bool:
+def download_whisper_model(whisper_cfg) -> bool:
     """Download Whisper model with progress display."""
-    import logging
-
     transcriber = _build_transcriber(whisper_cfg)
-
-    # Suppress logs during download to avoid interfering with progress bar
-    hf_logger = logging.getLogger("huggingface_hub")
-    sf_logger = logging.getLogger("subtitle_forge")
-    original_hf_level = hf_logger.level
-    original_sf_level = sf_logger.level
-
     try:
-        model_size = transcriber.get_model_size()
-
-        # Suppress logs during download
-        hf_logger.setLevel(logging.ERROR)
-        sf_logger.setLevel(logging.ERROR)
-
-        with Progress(
-            SpinnerColumn(),
-            TextColumn("[bold blue]{task.description}"),
-            BarColumn(bar_width=40),
-            TextColumn("[progress.percentage]{task.percentage:>3.1f}%"),
-            DownloadColumn(),
-            console=console,
-        ) as progress:
-            task = progress.add_task("Downloading...", total=model_size)
-            last_completed = 0
-
-            def update_progress(downloaded: int, total: int):
-                nonlocal last_completed
-                # Only update completed, not total (avoid accumulation bug)
-                if downloaded > last_completed:
-                    progress.update(task, completed=downloaded)
-                    last_completed = downloaded
-
-            transcriber.download_model(progress_callback=update_progress)
-
+        download_whisper_with_progress(transcriber)
         return True
     except KeyboardInterrupt:
         console.print("\n[yellow]Download paused. You can resume later when running subtitle-forge.[/yellow]")
@@ -78,10 +46,6 @@ def download_whisper_model(
     except Exception as e:
         console.print(f"\n[red]Download failed: {e}[/red]")
         return False
-    finally:
-        # Restore log levels
-        hf_logger.setLevel(original_hf_level)
-        sf_logger.setLevel(original_sf_level)
 
 
 def check_ffmpeg() -> bool:
@@ -121,27 +85,7 @@ def download_ollama_model(host: str, model: str) -> bool:
     manager = OllamaModelManager(host=host)
 
     try:
-        with Progress(
-            SpinnerColumn(),
-            TextColumn("[bold blue]{task.description}"),
-            BarColumn(bar_width=40),
-            TextColumn("[progress.percentage]{task.percentage:>3.1f}%"),
-            DownloadColumn(),
-            console=console,
-        ) as progress:
-            task = progress.add_task("Initializing...", total=None)
-
-            for dp in manager.pull_model(model):
-                # Safely check total_bytes (may be None or 0 during initialization)
-                if dp.total_bytes and dp.total_bytes > 0:
-                    progress.update(
-                        task,
-                        total=dp.total_bytes,
-                        completed=dp.completed_bytes or 0,
-                        description=dp.status.replace("_", " ").capitalize(),
-                    )
-                else:
-                    progress.update(task, description=dp.status.replace("_", " ").capitalize())
+        pull_ollama_with_progress(manager.pull_model(model))
 
         return True
     except KeyboardInterrupt:

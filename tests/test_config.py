@@ -64,6 +64,8 @@ def test_default_yaml_matches_code_defaults():
     code_defaults = dataclasses.asdict(AppConfig())
 
     def check(doc: dict, code: dict, prefix: str = "") -> None:
+        undocumented = sorted(set(code) - set(doc))
+        assert not undocumented, f"not in default.yaml: {prefix}{undocumented}"
         for key, value in doc.items():
             assert key in code, f"{prefix}{key} is documented but not an AppConfig field"
             if isinstance(value, dict):

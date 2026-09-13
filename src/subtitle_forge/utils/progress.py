@@ -1,6 +1,7 @@
 """Progress display utilities using Rich."""
 
-from typing import Optional, List
+import logging
+from typing import TYPE_CHECKING, Iterable, Iterator, Optional, List, Tuple
 from contextlib import contextmanager
 from datetime import datetime
 
@@ -11,6 +12,7 @@ from rich.progress import (
     SpinnerColumn,
     TextColumn,
     BarColumn,
+    DownloadColumn,
     TimeElapsedColumn,
     TimeRemainingColumn,
     MofNCompleteColumn,
@@ -19,6 +21,10 @@ from rich.panel import Panel
 from rich.table import Table
 
 from ..models.task import VideoTask, TaskStatus
+
+if TYPE_CHECKING:
+    from ..core.model_manager import DownloadProgress
+    from ..core.transcriber import Transcriber
 
 console = Console()
 
@@ -39,6 +45,69 @@ def set_ui_options(quiet: bool = False, no_progress: bool = False) -> None:
 def progress_disabled() -> bool:
     """Whether progress bars should be suppressed."""
     return _no_progress or _quiet
+
+
+@contextmanager
+def _download_bar(description: str, total: Optional[int]) -> Iterator[Tuple[Progress, TaskID]]:
+    """A byte-counting bar with one task; total=None until the download reports a size."""
+    with Progress(
+        SpinnerColumn(),
+        TextColumn("[bold blue]{task.description}"),
+        BarColumn(bar_width=40),
+        TextColumn("[progress.percentage]{task.percentage:>3.1f}%"),
+        DownloadColumn(),
+        console=console,
+        disable=progress_disabled(),
+    ) as progress:
+        yield progress, progress.add_task(description, total=total)
+
+
+@contextmanager
+def _quiet_download_logs() -> Iterator[None]:
+    """huggingface_hub and our own loggers at ERROR meanwhile: INFO lines tear the bar apart."""
+    loggers = [logging.getLogger("huggingface_hub"), logging.getLogger("subtitle_forge")]
+    levels = [lg.level for lg in loggers]
+    for lg in loggers:
+        lg.setLevel(logging.ERROR)
+    try:
+        yield
+    finally:
+        for lg, level in zip(loggers, levels):
+            lg.setLevel(level)
+
+
+def download_whisper_with_progress(transcriber: "Transcriber") -> None:
+    """Download the transcriber's Whisper model behind a progress bar; download errors propagate."""
+    with _quiet_download_logs(), _download_bar(
+        "Downloading...", transcriber.get_model_size()
+    ) as (progress, task):
+        last_completed = 0
+
+        def on_progress(downloaded: int, _total: int) -> None:
+            nonlocal last_completed
+            # Only `completed` moves: the size estimate stays the total, so the bar never jumps.
+            if downloaded > last_completed:
+                progress.update(task, completed=downloaded)
+                last_completed = downloaded
+
+        transcriber.download_model(progress_callback=on_progress)
+
+
+def pull_ollama_with_progress(updates: Iterable["DownloadProgress"]) -> None:
+    """Show an Ollama pull's progress stream as a bar; errors from the stream propagate."""
+    with _download_bar("Initializing...", None) as (progress, task):
+        for dp in updates:
+            description = dp.status.replace("_", " ").capitalize()
+            # total_bytes is 0 while Ollama pulls the manifest / verifies — only the status moves.
+            if dp.total_bytes:
+                progress.update(
+                    task,
+                    total=dp.total_bytes,
+                    completed=dp.completed_bytes or 0,
+                    description=description,
+                )
+            else:
+                progress.update(task, description=description)
 
 
 class SubtitleProgress:

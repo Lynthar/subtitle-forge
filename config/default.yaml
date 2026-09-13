@@ -30,6 +30,9 @@ whisper:
   # Set to null for standard inference
   batch_size: null
 
+  # Model cache directory (null = the HuggingFace default under ~/.cache)
+  download_root: null
+
   # VAD timing parameters. Subtitle on-screen feel is controlled by
   # timestamp.lead_in_ms / linger_ms below — these only affect how the VAD
   # cuts speech segments, NOT how long each subtitle is shown.
@@ -39,6 +42,12 @@ whisper:
   # WhisperX (better word-level alignment, requires the [whisperx] extra)
   use_whisperx: true
   whisperx_align: true
+
+  # HuggingFace token, only needed for gated / private model repos
+  hf_token: null
+
+  # HuggingFace mirror (e.g. https://hf-mirror.com); sets HF_ENDPOINT for the whole process
+  hf_endpoint: null
 
 ollama:
   # Ollama model name
@@ -62,6 +71,12 @@ ollama:
   # Per-request timeout in seconds. Long-running prompts will fail fast
   # instead of hanging the whole job.
   request_timeout: 180.0
+
+  # Custom prompt template text (null = the built-in JSON prompt)
+  prompt_template: null
+
+  # Prompt library template id (null = none selected)
+  prompt_template_id: null
 
 output:
   # Output file encoding

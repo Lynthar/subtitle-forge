@@ -273,6 +273,6 @@ def test_timestamp_and_vad_settings_reach_the_transcriber(tmp_path, video, fake_
 
     call = transcriber.calls[0]
     assert call["vad_parameters"] == {"speech_pad_ms": 111}
-    assert call["timestamp_config"]["mode"] == "full"
-    assert call["timestamp_config"]["split_sentences"] is False
+    assert call["timestamp_config"].mode == "full"
+    assert call["timestamp_config"].split_sentences is False
     assert call["post_process"] is True

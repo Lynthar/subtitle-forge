@@ -15,11 +15,11 @@ The pipeline cleans up its own audio scratch file in a finally block.
 """
 
 import logging
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Callable, ContextManager, List, Optional
 
-from ..models.config import AppConfig
+from ..models.config import AppConfig, TimestampConfig
 from .audio import AudioExtractor
 from .subtitle import SubtitleProcessor, normalize_target_languages, validate_language_codes
 from .transcriber import Transcriber
@@ -82,39 +82,30 @@ def build_timestamp_config(
     *,
     mode_override: Optional[str] = None,
     split_sentences_override: Optional[bool] = None,
-) -> Optional[dict]:
-    """Build the timestamp_config dict for Transcriber.transcribe().
+) -> Optional[TimestampConfig]:
+    """The timestamp settings for Transcriber.transcribe(), with the CLI overrides applied.
 
     Returns None when post-processing is disabled at the config level —
     callers should treat None as "skip the timestamp processor entirely".
     """
-    if not config.timestamp.enabled:
+    ts = config.timestamp
+    if not ts.enabled:
         return None
-    mode = mode_override or config.timestamp.mode
+    ts = replace(
+        ts,
+        mode=mode_override or ts.mode,
+        split_sentences=(
+            ts.split_sentences if split_sentences_override is None else split_sentences_override
+        ),
+    )
     valid_modes = {"off", "minimal", "full"}
-    if mode not in valid_modes:
+    if ts.mode not in valid_modes:
         # Without this, an unknown mode (e.g. a typo'd `--timestamp-mode min`)
         # silently fell through to the "full" branch in TimestampProcessor.
         raise ValueError(
-            f"Invalid timestamp mode {mode!r}; choose one of {sorted(valid_modes)}"
+            f"Invalid timestamp mode {ts.mode!r}; choose one of {sorted(valid_modes)}"
         )
-    return {
-        "mode": mode,
-        "min_duration": config.timestamp.min_duration,
-        "max_duration": config.timestamp.max_duration,
-        "min_gap": config.timestamp.min_gap,
-        "max_gap_warning": config.timestamp.max_gap_warning,
-        "chars_per_second": config.timestamp.chars_per_second,
-        "cjk_chars_per_second": config.timestamp.cjk_chars_per_second,
-        "split_threshold": config.timestamp.split_threshold,
-        "split_sentences": (
-            split_sentences_override
-            if split_sentences_override is not None
-            else config.timestamp.split_sentences
-        ),
-        "lead_in_ms": config.timestamp.lead_in_ms,
-        "linger_ms": config.timestamp.linger_ms,
-    }
+    return ts
 
 
 def build_vad_parameters(

@@ -149,8 +149,8 @@ def test_transcribe_passes_its_timing_flags_down(tmp_path, monkeypatch):
 
     assert result.exit_code == 0, result.output
     call = transcribe_calls[0]
-    assert call["timestamp_config"]["mode"] == "full"
-    assert call["timestamp_config"]["split_sentences"] is False
+    assert call["timestamp_config"].mode == "full"
+    assert call["timestamp_config"].split_sentences is False
 
 
 def test_batch_writes_original_and_translation_for_every_video(tmp_path, monkeypatch):

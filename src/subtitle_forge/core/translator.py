@@ -1,7 +1,7 @@
 """Translation module using Ollama."""
 
 from typing import List, Optional, Callable
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
 import json
 import re
 import logging
@@ -19,19 +19,9 @@ logger = logging.getLogger(__name__)
 
 
 @dataclass
-class TranslationConfig:
-    """Translation configuration."""
+class TranslationConfig(OllamaConfig):
+    """The ollama config section plus the per-run failure-log settings."""
 
-    model: str = "qwen2.5:14b"
-    host: str = "http://localhost:11434"
-    # Translation is deterministic — temperature=0 sharply reduces dropped
-    # / renumbered segments. Raise only for explicit creative paraphrasing.
-    temperature: float = 0.0
-    max_batch_size: int = 10
-    max_retries: int = 3
-    request_timeout: float = 180.0  # Per-request timeout (seconds)
-    prompt_template: Optional[str] = None  # Custom prompt template (None = use default)
-    prompt_template_id: Optional[str] = None  # Reference to prompt library template
     save_failed_log: bool = False  # Save failed translations to a log file
     failed_log_path: Optional[str] = None  # Path for failed translations log
 
@@ -141,18 +131,7 @@ Do not include any text outside the JSON object. Do not omit any indices. Do not
         Raises:
             TypeError: An override that is not a TranslationConfig field.
         """
-        kwargs = {
-            "model": cfg.model,
-            "host": cfg.host,
-            "temperature": cfg.temperature,
-            "max_batch_size": cfg.max_batch_size,
-            "max_retries": cfg.max_retries,
-            "request_timeout": cfg.request_timeout,
-            "prompt_template": cfg.prompt_template,
-            "prompt_template_id": cfg.prompt_template_id,
-        }
-        kwargs.update(overrides)
-        return cls(TranslationConfig(**kwargs))
+        return cls(TranslationConfig(**{**asdict(cfg), **overrides}))
 
     @property
     def client(self) -> Client:

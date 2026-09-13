@@ -14,7 +14,7 @@ from ...utils.progress import (
     print_success,
     print_error,
     print_info,
-    progress_disabled,
+    pull_ollama_with_progress,
 )
 
 app = typer.Typer(no_args_is_help=True)
@@ -393,7 +393,6 @@ def pull_model(
         subtitle-forge config pull-model
         subtitle-forge config pull-model --model qwen2.5:32b
     """
-    from rich.progress import Progress, SpinnerColumn, BarColumn, TextColumn, DownloadColumn
 
     from ...core.model_manager import OllamaModelManager, format_bytes
 
@@ -425,28 +424,7 @@ def pull_model(
     console.print("[dim]Tip: If interrupted, run this command again to resume download[/dim]\n")
 
     try:
-        with Progress(
-            SpinnerColumn(),
-            TextColumn("[bold blue]{task.description}"),
-            BarColumn(bar_width=40),
-            TextColumn("[progress.percentage]{task.percentage:>3.1f}%"),
-            DownloadColumn(),
-            console=console,
-            disable=progress_disabled(),
-        ) as progress:
-            task = progress.add_task("Initializing...", total=None)
-
-            for dp in manager.pull_model(target_model):
-                # Safely check total_bytes (may be None or 0 during initialization)
-                if dp.total_bytes and dp.total_bytes > 0:
-                    progress.update(
-                        task,
-                        total=dp.total_bytes,
-                        completed=dp.completed_bytes or 0,
-                        description=dp.status.replace("_", " ").capitalize(),
-                    )
-                else:
-                    progress.update(task, description=dp.status.replace("_", " ").capitalize())
+        pull_ollama_with_progress(manager.pull_model(target_model))
 
         print_success(f"Model {target_model} downloaded successfully!")
         console.print("\n[green]You can now use subtitle-forge for translation.[/green]")

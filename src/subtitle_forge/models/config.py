@@ -4,7 +4,7 @@ import os
 import sys
 import tempfile
 from pathlib import Path
-from dataclasses import dataclass, field, asdict
+from dataclasses import asdict, dataclass, field, fields, is_dataclass
 from typing import Optional, Tuple
 
 import yaml
@@ -128,15 +128,14 @@ class AppConfig:
         with open(path, "r", encoding="utf-8") as f:
             data = yaml.safe_load(f) or {}
 
-        config = cls(
-            whisper=WhisperConfig(**data.get("whisper", {})),
-            ollama=OllamaConfig(**data.get("ollama", {})),
-            output=OutputConfig(**data.get("output", {})),
-            timestamp=TimestampConfig(**data.get("timestamp", {})),
-            max_workers=data.get("max_workers", 2),
-            log_level=data.get("log_level", "INFO"),
-            log_file=data.get("log_file"),
-        )
+        kwargs: dict = {}
+        for fld in fields(cls):
+            section = fld.type
+            if isinstance(section, type) and is_dataclass(section):
+                kwargs[fld.name] = section(**data.get(fld.name, {}))
+            elif fld.name in data:
+                kwargs[fld.name] = data[fld.name]
+        config = cls(**kwargs)
         config.validate()
         return config
 

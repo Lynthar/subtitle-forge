@@ -11,7 +11,12 @@ without ffmpeg / torch / whisper.
 """
 
 from subtitle_forge.core.timestamp_processor import TimestampProcessor
+from subtitle_forge.models.config import TimestampConfig
 from subtitle_forge.models.subtitle import SubtitleSegment, WordTiming
+
+
+def _proc(**timestamp_fields):
+    return TimestampProcessor(TimestampConfig(**timestamp_fields))
 
 
 def _seg(index, start, end, text="x", words=True):
@@ -31,13 +36,13 @@ def test_minimal_mode_no_overlaps_in_fast_dialogue():
     # Three short utterances ~0.15s apart — min_duration extension used to push
     # each one over the next, and nothing fixed it afterwards.
     segs = [_seg(1, 10.00, 10.15), _seg(2, 10.30, 10.45), _seg(3, 10.60, 10.75)]
-    out = TimestampProcessor(mode="minimal", min_duration=1.0).process(segs, audio_duration=60.0)
+    out = _proc(mode="minimal", min_duration=1.0).process(segs, audio_duration=60.0)
     assert _overlaps(out) == []
 
 
 def test_minimal_mode_no_overlaps_without_audio_duration():
     segs = [_seg(1, 10.00, 10.15), _seg(2, 10.30, 10.45), _seg(3, 10.60, 10.75)]
-    out = TimestampProcessor(mode="minimal", min_duration=1.0).process(segs, audio_duration=None)
+    out = _proc(mode="minimal", min_duration=1.0).process(segs, audio_duration=None)
     assert _overlaps(out) == []
 
 
@@ -45,7 +50,7 @@ def test_off_mode_never_truncates_below_acoustic_end():
     # Two adjacent 50ms utterances. In "off" mode the second one's lead-in must
     # not pull the first one's end earlier than where speech actually ended.
     segs = [_seg(1, 9.920, 9.970), _seg(2, 10.000, 10.050)]
-    out = TimestampProcessor(mode="off", min_duration=1.0).process(segs, audio_duration=60.0)
+    out = _proc(mode="off", min_duration=1.0).process(segs, audio_duration=60.0)
     assert out[0].end >= 9.970 - 1e-9
     assert _overlaps(out) == []
 
@@ -53,7 +58,7 @@ def test_off_mode_never_truncates_below_acoustic_end():
 def test_all_modes_produce_ordered_nonnegative_durations():
     segs = [_seg(1, 10.00, 10.15), _seg(2, 10.30, 10.45), _seg(3, 10.60, 10.75)]
     for mode in ("off", "minimal", "full"):
-        out = TimestampProcessor(mode=mode, min_duration=1.0).process(
+        out = _proc(mode=mode, min_duration=1.0).process(
             [_seg(s.index, s.start, s.end) for s in segs], audio_duration=60.0
         )
         assert all(s.end >= s.start for s in out), mode
@@ -64,7 +69,7 @@ def test_proportional_split_stays_within_parent_span():
     # No word timestamps -> proportional fallback. Must never exceed seg.end or
     # go negative (the old code inflated each piece to min_duration and blew past
     # the parent, forcing a negative-duration final piece).
-    proc = TimestampProcessor(mode="off", min_duration=1.0)
+    proc = _proc(mode="off", min_duration=1.0)
     parent = SubtitleSegment(1, 5.0, 8.0, "Go. Run. Hide. Wait. Stop. Now.", words=None)
     pieces = proc._split_segment_proportionally(parent)
     assert len(pieces) > 1
@@ -75,7 +80,7 @@ def test_proportional_split_stays_within_parent_span():
 
 
 def test_split_sentences_full_pipeline_no_negative_durations():
-    proc = TimestampProcessor(mode="minimal", min_duration=1.0, split_sentences=True)
+    proc = _proc(mode="minimal", min_duration=1.0, split_sentences=True)
     parent = SubtitleSegment(1, 5.0, 8.0, "Go. Run. Hide. Wait. Stop. Now.", words=None)
     out = proc.process([parent], audio_duration=60.0)
     assert all(s.end >= s.start for s in out)
@@ -83,7 +88,7 @@ def test_split_sentences_full_pipeline_no_negative_durations():
 
 def test_word_timestamps_preserved_through_minimal():
     segs = [_seg(1, 1.0, 2.0), _seg(2, 5.0, 6.0)]
-    out = TimestampProcessor(mode="minimal").process(segs, audio_duration=60.0)
+    out = _proc(mode="minimal").process(segs, audio_duration=60.0)
     assert all(s.has_word_timestamps() for s in out)
 
 
@@ -92,7 +97,7 @@ def test_full_mode_does_not_truncate_aligned_overlong_segment():
     # to reading time (~1s for "No") and drop the word timestamps with it —
     # leaving the rest of the utterance with no subtitle at all.
     seg = _seg(1, 0.0, 12.0, text="No")
-    out = TimestampProcessor(mode="full", max_duration=8.0).process([seg], audio_duration=20.0)
+    out = _proc(mode="full", max_duration=8.0).process([seg], audio_duration=20.0)
     assert out[0].end >= 12.0 - 1e-9
     assert out[0].has_word_timestamps()
 
@@ -101,7 +106,7 @@ def test_full_mode_still_caps_unaligned_overlong_segment():
     # Without word timing the stretched end-time is a transcriber artifact —
     # capping those is the pass's actual job.
     seg = _seg(1, 0.0, 60.0, text="short", words=False)
-    out = TimestampProcessor(mode="full", max_duration=8.0).process([seg], audio_duration=120.0)
+    out = _proc(mode="full", max_duration=8.0).process([seg], audio_duration=120.0)
     assert out[0].end - out[0].start <= 8.0 + 1e-9
 
 
@@ -110,7 +115,7 @@ def test_lead_in_linger_stays_inside_audio_at_tail():
     # mode). The neighbour clamp used to push the second start past the audio
     # end, and the safety net then re-extended its end to 11.05s in a 10s file.
     segs = [_seg(1, 9.4, 10.0), _seg(2, 9.9, 10.0)]
-    out = TimestampProcessor(mode="off", min_duration=1.0).process(segs, audio_duration=10.0)
+    out = _proc(mode="off", min_duration=1.0).process(segs, audio_duration=10.0)
     assert all(s.start <= 10.0 + 1e-9 for s in out)
     assert all(s.end <= 10.0 + 1e-9 for s in out)
     assert all(s.end > s.start for s in out)
@@ -122,7 +127,7 @@ def test_off_mode_sentence_split_does_not_manufacture_overlap():
     # no downstream repair pass, so an overlap it emits ships as-is.
     words = [WordTiming("Hi.", 0.0, 0.2), WordTiming("Okay", 0.2, 1.2)]
     seg = SubtitleSegment(1, 0.0, 1.2, "Hi. Okay", words=words)
-    out = TimestampProcessor(mode="off", split_sentences=True).process([seg], audio_duration=100.0)
+    out = _proc(mode="off", split_sentences=True).process([seg], audio_duration=100.0)
     assert len(out) == 2
     assert _overlaps(out) == []
     # The acoustic ends must survive (bounds only limit extensions).
@@ -138,7 +143,7 @@ def test_off_mode_split_last_sentence_respects_next_segment():
         SubtitleSegment(1, 0.0, 10.0, "Sure. Hmm", words=words_a),
         SubtitleSegment(2, 10.1, 12.0, "Next line", words=words_b),
     ]
-    out = TimestampProcessor(mode="off", split_sentences=True).process(segs, audio_duration=100.0)
+    out = _proc(mode="off", split_sentences=True).process(segs, audio_duration=100.0)
     assert len(out) == 3
     assert _overlaps(out) == []
 
@@ -147,7 +152,7 @@ def test_text_split_keeps_abbreviations_with_their_sentence():
     # The text-level splitter runs whenever alignment produced no word timing,
     # and it used to lack the abbreviation guard that the word-level splitter
     # got — real GPU output cut "Mr. Smith arrived..." into a 0.18s "Mr." cue.
-    proc = TimestampProcessor(mode="minimal")
+    proc = _proc(mode="minimal")
     assert proc._split_into_sentences("Mr. Smith arrived at dawn. He waited.") == [
         "Mr. Smith arrived at dawn.",
         "He waited.",
@@ -159,7 +164,7 @@ def test_text_split_keeps_abbreviations_with_their_sentence():
 
 
 def test_abbreviations_are_not_sentence_ends():
-    proc = TimestampProcessor(mode="off")
+    proc = _proc(mode="off")
     for word in ("Mr.", "Dr.", "MRS.", "vs.", "J."):
         assert proc._is_sentence_end(word) is False, word
     for word in ("stop.", "done!", "really?", "だ。"):

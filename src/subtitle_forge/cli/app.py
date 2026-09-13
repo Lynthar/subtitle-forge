@@ -230,7 +230,8 @@ def process(
         print_info,
         print_warning,
         print_translation_explainer,
-        progress_disabled,
+        download_whisper_with_progress,
+        pull_ollama_with_progress,
     )
 
     cfg = get_config()
@@ -306,47 +307,10 @@ def process(
 
         # Check and download Whisper model if needed (separate progress bar)
         if not transcriber.is_model_cached():
-            from rich.progress import Progress, SpinnerColumn, BarColumn, TextColumn, DownloadColumn
-            import logging
-
             model_size_mb = transcriber.get_model_size() / (1024 * 1024)
             console.print(f"\n[cyan]Downloading Whisper model: {cfg.whisper.model}[/cyan]")
             console.print(f"[dim]Model size: ~{model_size_mb:.0f}MB (one-time download)[/dim]\n")
-
-            # Suppress logs during download to avoid interfering with progress bar
-            hf_logger = logging.getLogger("huggingface_hub")
-            sf_logger = logging.getLogger("subtitle_forge")
-            original_hf_level = hf_logger.level
-            original_sf_level = sf_logger.level
-            hf_logger.setLevel(logging.ERROR)
-            sf_logger.setLevel(logging.ERROR)
-
-            try:
-                with Progress(
-                    SpinnerColumn(),
-                    TextColumn("[bold blue]{task.description}"),
-                    BarColumn(bar_width=40),
-                    TextColumn("[progress.percentage]{task.percentage:>3.1f}%"),
-                    DownloadColumn(),
-                    console=console,
-                    disable=progress_disabled(),
-                ) as dl_progress:
-                    dl_task = dl_progress.add_task("Downloading...", total=transcriber.get_model_size())
-                    last_completed = 0
-
-                    def update_whisper_download(downloaded: int, total: int):
-                        nonlocal last_completed
-                        # Only update completed, not total (avoid accumulation bug)
-                        if downloaded > last_completed:
-                            dl_progress.update(dl_task, completed=downloaded)
-                            last_completed = downloaded
-
-                    transcriber.ensure_model_downloaded(progress_callback=update_whisper_download)
-            finally:
-                # Restore log levels
-                hf_logger.setLevel(original_hf_level)
-                sf_logger.setLevel(original_sf_level)
-
+            download_whisper_with_progress(transcriber)
             print_info("Whisper model downloaded successfully!\n")
 
         # Initialize translator
@@ -369,41 +333,15 @@ def process(
         if not translator.check_model_available():
             print_warning(f"Translation model '{cfg.ollama.model}' not found")
             if typer.confirm("Download model now?", default=True):
-                from rich.progress import Progress, SpinnerColumn, BarColumn, TextColumn, DownloadColumn
-
                 console.print(f"\n[cyan]Downloading model: {cfg.ollama.model}[/cyan]")
                 console.print("[dim]This may take a while for large models...[/dim]\n")
 
-                with Progress(
-                    SpinnerColumn(),
-                    TextColumn("[bold blue]{task.description}"),
-                    BarColumn(bar_width=40),
-                    TextColumn("[progress.percentage]{task.percentage:>3.1f}%"),
-                    DownloadColumn(),
-                    console=console,
-                    disable=progress_disabled(),
-                ) as dl_progress:
-                    dl_task = dl_progress.add_task("Downloading...", total=None)
-
-                    def update_download(dp):
-                        if dp.total_bytes and dp.total_bytes > 0:
-                            dl_progress.update(
-                                dl_task,
-                                total=dp.total_bytes,
-                                completed=dp.completed_bytes or 0,
-                                description=dp.status.replace("_", " ").capitalize(),
-                            )
-
-                    ready = translator.ensure_model_ready(progress_callback=update_download)
-
-                # ensure_model_ready returns False on download failure —
-                # printing success and only failing after transcription
-                # finished wastes the whole GPU run.
-                if not ready:
-                    print_error(
-                        f"Failed to download model '{cfg.ollama.model}'. "
-                        "Run: subtitle-forge config pull-model"
-                    )
+                # Fail here, not after transcription: a GPU run that ends
+                # with no translation model is wasted.
+                try:
+                    pull_ollama_with_progress(translator.model_manager.pull_model(cfg.ollama.model))
+                except RuntimeError as e:
+                    print_error(f"{e}\nRun: subtitle-forge config pull-model")
                     raise typer.Exit(1)
                 print_info("Model downloaded successfully!\n")
             else:

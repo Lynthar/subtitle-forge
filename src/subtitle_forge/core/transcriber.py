@@ -14,7 +14,7 @@ import threading
 
 from faster_whisper import WhisperModel, BatchedInferencePipeline
 
-from ..models.config import WhisperConfig
+from ..models.config import TimestampConfig, WhisperConfig
 from ..models.subtitle import SubtitleSegment, WordTiming
 from ..utils.gpu import get_optimal_compute_type, get_available_vram
 from ..exceptions import TranscriptionError
@@ -114,25 +114,26 @@ class Transcriber:
 
     def __init__(
         self,
-        model_name: str = "large-v3",
-        device: str = "cuda",
+        *,
+        model_name: str,
+        device: str,
+        use_whisperx: bool,
+        whisperx_align: bool,
         compute_type: Optional[str] = None,
         download_root: Optional[str] = None,
-        use_whisperx: bool = True,
-        whisperx_align: bool = True,
         hf_token: Optional[str] = None,
         hf_endpoint: Optional[str] = None,
     ):
         """
-        Initialize transcriber.
+        Initialize transcriber. Build through from_config(): the defaults live in WhisperConfig.
 
         Args:
             model_name: Whisper model name.
             device: Device type (cuda/cpu).
-            compute_type: Compute precision (float16/int8_float16/int8).
-            download_root: Model download directory.
             use_whisperx: Use WhisperX for better timestamp accuracy.
             whisperx_align: Enable forced alignment with wav2vec2.
+            compute_type: Compute precision (float16/int8_float16/int8); None picks per device.
+            download_root: Model download directory.
             hf_token: HuggingFace token, passed to model downloads (needed
                 only for gated/private repos).
             hf_endpoint: HuggingFace mirror endpoint (e.g., "https://hf-mirror.com").
@@ -358,25 +359,6 @@ class Transcriber:
             logger.error(f"Failed to download model: {e}")
             raise TranscriptionError(f"Failed to download Whisper model: {e}") from e
 
-    def ensure_model_downloaded(
-        self,
-        progress_callback: Optional[Callable[[int, int], None]] = None,
-    ) -> bool:
-        """
-        Ensure Whisper model is downloaded, with optional progress callback.
-
-        Args:
-            progress_callback: Callback(downloaded_bytes, total_bytes) for progress.
-
-        Returns:
-            True if model was downloaded, False if already cached.
-        """
-        if self.is_model_cached():
-            logger.info(f"Whisper model {self.model_name} is already cached")
-            return False
-
-        self.download_model(progress_callback)
-        return True
 
     def load_model(self) -> None:
         """Load Whisper model."""
@@ -397,20 +379,16 @@ class Transcriber:
 
         logger.info("Model loaded successfully")
 
-    # VAD tuned for subtitle timing: speech_pad 250ms (silero default 400) keeps segments tight
-    # without eating word onsets; min_silence 700ms avoids merging adjacent utterances in fast
-    # dialogue. On-screen feel comes from lead-in/linger, NOT VAD padding — keep them apart.
+    # Values derive from WhisperConfig (rationale there). VAD sets where speech is cut; on-screen
+    # feel comes from lead-in/linger — keep the two apart.
     DEFAULT_VAD_PARAMETERS = {
-        "speech_pad_ms": 250,
-        "min_silence_duration_ms": 700,
+        "speech_pad_ms": WhisperConfig.speech_pad_ms,
+        "min_silence_duration_ms": WhisperConfig.min_silence_duration_ms,
     }
 
     # Preset VAD modes for different use cases
     VAD_PRESETS = {
-        "default": {
-            "speech_pad_ms": 250,
-            "min_silence_duration_ms": 700,
-        },
+        "default": DEFAULT_VAD_PARAMETERS,
         "aggressive": {
             # Snappier, may clip word edges — useful for very fast dialogue
             "speech_pad_ms": 150,
@@ -470,7 +448,7 @@ class Transcriber:
         batch_size: Optional[int] = None,
         vad_parameters: Optional[dict] = None,
         post_process: bool = True,
-        timestamp_config: Optional[dict] = None,
+        timestamp_config: Optional[TimestampConfig] = None,
     ) -> Tuple[List[SubtitleSegment], TranscriptionInfo]:
         """
         Transcribe audio file.
@@ -484,7 +462,7 @@ class Transcriber:
             batch_size: Batch size for BatchedInferencePipeline.
             vad_parameters: Custom VAD parameters. Uses optimized defaults if None.
             post_process: Enable timestamp post-processing.
-            timestamp_config: TimestampProcessor configuration dict.
+            timestamp_config: Timestamp post-processing settings; None = TimestampConfig().
 
         Returns:
             Tuple of (subtitle segments, transcription info).
@@ -526,12 +504,13 @@ class Transcriber:
     def _transcribe_whisperx(
         self,
         audio_path: Path,
-        language: Optional[str] = None,
-        beam_size: int = 5,
-        batch_size: Optional[int] = None,
-        vad_parameters: Optional[dict] = None,
-        post_process: bool = True,
-        timestamp_config: Optional[dict] = None,
+        *,
+        language: Optional[str],
+        beam_size: int,
+        batch_size: Optional[int],
+        vad_parameters: Optional[dict],
+        post_process: bool,
+        timestamp_config: Optional[TimestampConfig],
     ) -> Tuple[List[SubtitleSegment], TranscriptionInfo]:
         """Transcribe using WhisperX with forced alignment."""
         import whisperx
@@ -699,14 +678,15 @@ class Transcriber:
     def _transcribe_faster_whisper(
         self,
         audio_path: Path,
-        language: Optional[str] = None,
-        beam_size: int = 5,
-        vad_filter: bool = True,
-        word_timestamps: bool = True,
-        batch_size: Optional[int] = None,
-        vad_parameters: Optional[dict] = None,
-        post_process: bool = True,
-        timestamp_config: Optional[dict] = None,
+        *,
+        language: Optional[str],
+        beam_size: int,
+        vad_filter: bool,
+        word_timestamps: bool,
+        batch_size: Optional[int],
+        vad_parameters: Optional[dict],
+        post_process: bool,
+        timestamp_config: Optional[TimestampConfig],
     ) -> Tuple[List[SubtitleSegment], TranscriptionInfo]:
         """Transcribe using faster-whisper."""
         self.load_model()
@@ -805,29 +785,14 @@ class Transcriber:
         self,
         segments: List[SubtitleSegment],
         audio_duration: float,
-        timestamp_config: Optional[dict] = None,
+        timestamp_config: Optional[TimestampConfig] = None,
         audio_path: Optional[Path] = None,
         language: Optional[str] = None,
     ) -> List[SubtitleSegment]:
         """Apply timestamp post-processing."""
         from .timestamp_processor import TimestampProcessor
 
-        config = timestamp_config or {}
-        processor = TimestampProcessor(
-            mode=config.get("mode", "minimal"),
-            language=language,
-            min_duration=config.get("min_duration", 1.0),
-            max_duration=config.get("max_duration", 8.0),
-            min_gap=config.get("min_gap", 0.05),
-            max_gap_warning=config.get("max_gap_warning", 10.0),
-            chars_per_second=config.get("chars_per_second", 15.0),
-            cjk_chars_per_second=config.get("cjk_chars_per_second", 10.0),
-            split_threshold=config.get("split_threshold", 30),
-            split_sentences=config.get("split_sentences", False),
-            lead_in_ms=config.get("lead_in_ms", 80),
-            linger_ms=config.get("linger_ms", 300),
-        )
-
+        processor = TimestampProcessor(timestamp_config or TimestampConfig(), language=language)
         return processor.process(segments, audio_duration)
 
     def unload_model(self) -> None:
