@@ -23,19 +23,19 @@ jobs:
     steps:
       - uses: actions/checkout@v5
 
-      - uses: actions/setup-python@v6
+      - uses: astral-sh/setup-uv@v10
         with:
           python-version: "3.12"
 
-      # Same minor as .pre-commit-config.yaml; the rule set itself lives in pyproject.toml.
-      - name: Install ruff
-        run: pip install "ruff>=0.16,<0.17"
+      # ruff comes from uv.lock, the same build every dev venv and the pre-commit hook run.
+      - name: Install the locked dev environment
+        run: uv sync --locked --extra dev
 
       - name: Ruff check
-        run: ruff check
+        run: uv run ruff check
 
       - name: Ruff format check
-        run: ruff format --check
+        run: uv run ruff format --check
 
   test:
     name: pytest (py${{ matrix.python-version }})
@@ -48,17 +48,14 @@ jobs:
     steps:
       - uses: actions/checkout@v5
 
-      - uses: actions/setup-python@v6
+      - uses: astral-sh/setup-uv@v10
         with:
           python-version: ${{ matrix.python-version }}
-          cache: pip
 
       # No [whisperx] extra: that pulls torch, and the suite fakes Whisper, ffmpeg
       # and Ollama anyway. Tests needing an absent package importorskip themselves.
-      - name: Install the project with the dev and serve extras
-        run: |
-          python -m pip install --upgrade pip
-          pip install -e ".[dev,serve]"
+      - name: Install the locked dev and serve environment
+        run: uv sync --locked --extra dev --extra serve
 
       - name: Run tests
-        run: pytest
+        run: uv run pytest

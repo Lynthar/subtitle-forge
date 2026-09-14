@@ -1,7 +1,7 @@
-# Same ruff as CI: the rule set comes from pyproject.toml, so the two cannot drift.
+# Same ruff as uv.lock and CI: the rule set comes from pyproject.toml, so the three cannot drift.
 repos:
   - repo: https://github.com/astral-sh/ruff-pre-commit
-    rev: v0.16.6
+    rev: v0.16.7
     hooks:
       - id: ruff-check
       - id: ruff-format

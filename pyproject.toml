@@ -36,11 +36,13 @@ dependencies = [
 
 [project.optional-dependencies]
 dev = [
-    "pytest>=7.0.0",
+    # pytest 9 needs Python 3.10; the 3.9 floor still gets 8.x. mypy 2 rejects
+    # python_version = "3.9", and ruff's rule set shifts between minors.
+    "pytest>=8,<10",
     "pytest-asyncio>=0.21.0",
     "pytest-cov>=4.0.0",
-    "ruff>=0.1.0",
-    "mypy>=1.0.0",
+    "ruff>=0.16,<0.17",
+    "mypy>=1.8,<2",
 ]
 whisperx = [
     "whisperx>=3.1.0",

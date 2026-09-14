@@ -140,6 +140,8 @@ subtitle-forge quickstart
 
 可以叠加：`pip install -e '.[whisperx,serve]'`。
 
+开发与 CI 走 [uv](https://docs.astral.sh/uv/)：`uv sync --locked --extra dev --extra serve` 按仓里的 `uv.lock` 装出与 CI 完全相同的一套版本，之后用 `uv run pytest` / `uv run ruff check` 跑门禁。`pip install -e '.[dev]'` 仍然可用，只是版本不锁。
+
 ---
 
 ## GPU 加速设置
