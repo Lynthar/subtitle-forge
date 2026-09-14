@@ -339,6 +339,9 @@ FOLLOWING DIALOGUE (for context, DO NOT translate):
         logger.debug(f"Raw LLM response:\n{response_preview}")
 
         index_to_translation: dict = {}
+        # Each fallback runs until every requested index is present. Counting entries is
+        # not enough: a reply renumbered from 1 has the right count and none of our indices.
+        expected = {seg.index for seg in original_segments}
 
         # Strategy 1: JSON parsing (the new default path).
         # The LLM may wrap the JSON in markdown fences or add a stray prefix
@@ -371,7 +374,7 @@ FOLLOWING DIALOGUE (for context, DO NOT translate):
 
         # Strategy 2: [N] prefixed lines (legacy format, also catches stray
         # markdown like **[1]** text)
-        if len(index_to_translation) < len(original_segments):
+        if not expected.issubset(index_to_translation):
             pattern1 = r"\[(\d+)\]\s*[:：]?\s*(.+?)(?=\[\d+\]|$)"
             matches = re.findall(pattern1, response, re.DOTALL)
             for idx_str, text in matches:
@@ -381,7 +384,7 @@ FOLLOWING DIALOGUE (for context, DO NOT translate):
                     index_to_translation[idx] = text
 
         # Strategy 3: bare numbered lines — "1.", "1:", "1)", "(1)"
-        if len(index_to_translation) < len(original_segments):
+        if not expected.issubset(index_to_translation):
             pattern2 = r"(?:^|\n)\s*[\(\[]?(\d+)[\]\)]?\s*[.:：\)]\s*(.+?)(?=\n\s*[\(\[]?\d+[\]\)]?\s*[.:：\)]|$)"
             matches = re.findall(pattern2, response, re.DOTALL)
             for idx_str, text in matches:
@@ -391,7 +394,7 @@ FOLLOWING DIALOGUE (for context, DO NOT translate):
                     index_to_translation[idx] = text
 
         # Strategy 4: positional fallback — same number of non-empty lines
-        if len(index_to_translation) < len(original_segments):
+        if not expected.issubset(index_to_translation):
             lines = [line.strip() for line in response.strip().split("\n") if line.strip()]
             lines = [
                 line
