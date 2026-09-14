@@ -128,8 +128,8 @@ timestamp:
   # Reading speed for Western languages (chars per second)
   chars_per_second: 15.0
 
-  # Reading speed for CJK languages (Chinese/Japanese/Korean)
-  # CJK characters are denser, so use slower speed
+  # Reading speed for CJK languages (Chinese/Japanese/Korean), in full-width characters:
+  # a half-width character (Latin, digits, ｶﾅ) counts 0.5. CJK characters are denser, so slower.
   cjk_chars_per_second: 10.0
 
   # Minimum text length before attempting to split segments (full mode only)

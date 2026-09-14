@@ -10,7 +10,7 @@ The module is pure/functional and has no heavy dependencies, so these run
 without ffmpeg / torch / whisper.
 """
 
-from subtitle_forge.core.timestamp_processor import TimestampProcessor
+from subtitle_forge.core.timestamp_processor import TimestampProcessor, display_cells
 from subtitle_forge.models.config import TimestampConfig
 from subtitle_forge.models.subtitle import SubtitleSegment, WordTiming
 
@@ -169,3 +169,26 @@ def test_abbreviations_are_not_sentence_ends():
         assert proc._is_sentence_end(word) is False, word
     for word in ("stop.", "done!", "really?", "だ。"):
         assert proc._is_sentence_end(word) is True, word
+
+
+def test_display_cells_counts_wide_characters_twice():
+    # Netflix counts a full-width character as 1 and a half-width one as 0.5;
+    # display_cells keeps that ratio in half-width units.
+    assert display_cells("今日はABCDEFGHIJです") == 20
+    assert display_cells("ＡＢＣ") == 6
+    assert display_cells("ｱｲｳ") == 3
+    assert display_cells("plain ascii") == 11
+
+
+def test_reading_time_weighs_halfwidth_text_in_a_cjk_line_by_half():
+    # 5 full-width + 10 half-width characters at 10 full-width chars/s: 1.0s of
+    # reading time, not the 1.5s that counting code points gave.
+    proc = TimestampProcessor(
+        TimestampConfig(
+            mode="full", min_duration=0.1, lead_in_ms=0, linger_ms=0, cjk_chars_per_second=10.0
+        ),
+        language="ja",
+    )
+    seg = _seg(1, 0.0, 0.2, text="今日はABCDEFGHIJです", words=False)
+    out = proc.process([seg], audio_duration=60.0)
+    assert abs(out[0].end - 1.0) < 1e-9

@@ -4,6 +4,7 @@ from dataclasses import dataclass
 from typing import List, Optional, Tuple
 import logging
 import re
+import unicodedata
 
 from ..models.config import TimestampConfig
 from ..models.subtitle import SubtitleSegment, WordTiming
@@ -16,6 +17,13 @@ SENTENCE_ENDINGS = re.compile(r"([。！？!?\.\n]+)")
 CJK_SENTENCE_ENDINGS = re.compile(r"([。！？」』）]+)")
 # Pattern to detect sentence-ending punctuation (for word matching)
 SENTENCE_END_CHARS = set("。！？!?.")
+
+
+def display_cells(text: str) -> int:
+    """Text length in half-width cells: a wide (East Asian Width F/W) character is 2,
+    anything else 1 — Netflix's full-width 1 / half-width 0.5 rule, doubled to stay integral.
+    Reading-speed and split-threshold arithmetic in this module all works in these cells."""
+    return sum(2 if unicodedata.east_asian_width(ch) in ("F", "W") else 1 for ch in text)
 
 
 @dataclass
@@ -99,9 +107,10 @@ class TimestampProcessor:
         self._issues: List[TimestampIssue] = []
         self._gaps: List[GapInfo] = []
 
-        # Select effective reading speed based on language
+        # Effective reading speed in half-width cells per second (see display_cells):
+        # the CJK setting counts full-width characters, two cells each.
         if self._is_cjk_language(language):
-            self._effective_cps = config.cjk_chars_per_second
+            self._effective_cps = 2 * config.cjk_chars_per_second
             logger.debug(f"Using CJK reading speed: {config.cjk_chars_per_second} chars/sec")
         else:
             self._effective_cps = config.chars_per_second
@@ -114,10 +123,10 @@ class TimestampProcessor:
         return language.lower() in cls.CJK_LANGUAGES
 
     def _get_split_threshold(self) -> int:
-        """Get language-appropriate split threshold."""
+        """Get language-appropriate split threshold, in half-width cells."""
         if self._is_cjk_language(self.language):
-            # CJK characters are denser, use lower threshold
-            return max(15, self.split_threshold // 2)
+            # CJK characters are denser: half the count, but at least 15 full-width characters
+            return 2 * max(15, self.split_threshold // 2)
         return self.split_threshold
 
     def process(
@@ -238,7 +247,7 @@ class TimestampProcessor:
                 continue
 
             text = seg.text.strip()
-            chars = max(1, len(text))
+            chars = max(1, display_cells(text))
             readable = chars / self._effective_cps
             speech_time = readable * 2  # rough speech-vs-reading speed ratio
 
@@ -250,7 +259,7 @@ class TimestampProcessor:
             if actual > comfortable:
                 logger.debug(
                     f"Capping unaligned segment {seg.index}: {actual:.2f}s -> "
-                    f"{comfortable:.2f}s (text length {chars} chars)"
+                    f"{comfortable:.2f}s (text length {chars} cells)"
                 )
                 seg = SubtitleSegment(
                     index=seg.index,
@@ -457,7 +466,7 @@ class TimestampProcessor:
 
             if duration > self.max_duration:
                 # Estimate reasonable duration based on text length
-                chars = len(seg.text)
+                chars = display_cells(seg.text)
                 estimated_duration = max(
                     self.min_duration, min(chars / self._effective_cps, self.max_duration)
                 )
@@ -646,7 +655,7 @@ class TimestampProcessor:
 
             # Skip short segments (use language-aware threshold)
             threshold = self._get_split_threshold()
-            if len(seg.text) < threshold:
+            if display_cells(seg.text) < threshold:
                 result.append(seg)
                 continue
 
@@ -660,13 +669,13 @@ class TimestampProcessor:
             # Distribute time proportionally across sentences, strictly within [seg.start, seg.end]:
             # inflating each piece to min_duration overflowed the span and produced negative last
             # pieces.
-            total_chars = sum(len(s) for s in sentences)
+            total_chars = sum(display_cells(s) for s in sentences)
             total_duration = max(0.0, seg.end - seg.start)
             current_time = seg.start
             n = len(sentences)
 
             for i, sentence in enumerate(sentences):
-                char_ratio = len(sentence) / total_chars if total_chars > 0 else 1.0 / n
+                char_ratio = display_cells(sentence) / total_chars if total_chars > 0 else 1.0 / n
                 end_time = seg.end if i == n - 1 else current_time + total_duration * char_ratio
                 end_time = min(end_time, seg.end)
                 if end_time <= current_time:
@@ -749,7 +758,7 @@ class TimestampProcessor:
 
             # Calculate minimum required duration based on text length
             # Using language-appropriate reading speed
-            chars = len(seg.text)
+            chars = display_cells(seg.text)
             min_required_duration = max(self.min_duration, chars / self._effective_cps)
 
             current_duration = seg.end - seg.start
@@ -887,7 +896,7 @@ class TimestampProcessor:
             bound = next_segment_start if is_last else sentences[i + 1][1]
 
             # Calculate minimum readable duration based on text length
-            char_count = len(text)
+            char_count = display_cells(text)
             min_readable_duration = max(
                 self.min_duration,
                 char_count / self._effective_cps,
@@ -1033,14 +1042,14 @@ class TimestampProcessor:
         # Distribute time proportionally across sentences, strictly within [seg.start, seg.end]:
         # inflating each piece to min_duration overflowed the span and produced negative last
         # pieces.
-        total_chars = sum(len(s) for s in sentences)
+        total_chars = sum(display_cells(s) for s in sentences)
         total_duration = max(0.0, seg.end - seg.start)
         current_time = seg.start
         result: List[SubtitleSegment] = []
         n = len(sentences)
 
         for i, sentence in enumerate(sentences):
-            char_ratio = len(sentence) / total_chars if total_chars > 0 else 1.0 / n
+            char_ratio = display_cells(sentence) / total_chars if total_chars > 0 else 1.0 / n
             # Last piece lands exactly on seg.end; others accrue proportionally.
             end_time = seg.end if i == n - 1 else current_time + total_duration * char_ratio
             # Never exceed the parent end or run backwards.
