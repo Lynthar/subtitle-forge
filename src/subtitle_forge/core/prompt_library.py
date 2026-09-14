@@ -260,7 +260,7 @@ class PromptLibrary:
     # location (a hardcoded ~/.config here silently split the two on Windows).
     USER_TEMPLATES_DIR = AppConfig.get_config_path().parent / "prompts"
 
-    def __init__(self):
+    def __init__(self) -> None:
         self._user_templates: Dict[str, PromptTemplate] = {}
         self._loaded = False
 

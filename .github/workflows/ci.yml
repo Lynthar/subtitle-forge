@@ -37,6 +37,24 @@ jobs:
       - name: Ruff format check
         run: uv run ruff format --check
 
+  typecheck:
+    name: mypy
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      # python_version = "3.9" makes mypy parse installed dependencies with 3.9 syntax; on
+      # 3.10+ the locked huggingface_hub / numpy sources use newer syntax and the run stops early.
+      - uses: astral-sh/setup-uv@v10
+        with:
+          python-version: "3.9"
+
+      - name: Install the locked dev and serve environment
+        run: uv sync --locked --extra dev --extra serve
+
+      - name: Mypy
+        run: uv run mypy src/ --no-incremental
+
   test:
     name: pytest (py${{ matrix.python-version }})
     runs-on: ubuntu-latest

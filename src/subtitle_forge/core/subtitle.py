@@ -76,7 +76,9 @@ class SubtitleProcessor:
     @staticmethod
     def time_to_seconds(time: pysrt.SubRipTime) -> float:
         """Convert SRT time format to seconds."""
-        return time.hours * 3600 + time.minutes * 60 + time.seconds + time.milliseconds / 1000
+        return float(
+            time.hours * 3600 + time.minutes * 60 + time.seconds + time.milliseconds / 1000
+        )
 
     def segments_to_srt(self, segments: List[SubtitleSegment]) -> pysrt.SubRipFile:
         """Convert subtitle segments to pysrt object."""

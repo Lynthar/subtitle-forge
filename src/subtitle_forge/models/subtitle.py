@@ -50,7 +50,7 @@ class SubtitleSegment:
             Tuple of (start, end) times. Uses word timestamps if available,
             otherwise returns original segment times.
         """
-        if self.has_word_timestamps():
+        if self.words:
             return self.words[0].start, self.words[-1].end
         return self.start, self.end
 

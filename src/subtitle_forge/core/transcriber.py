@@ -8,7 +8,7 @@ import os
 os.environ.setdefault("TORCH_FORCE_NO_WEIGHTS_ONLY_LOAD", "1")
 
 from pathlib import Path
-from typing import Optional, List, Tuple, Callable
+from typing import Any, Dict, Optional, List, Tuple, Callable
 from dataclasses import dataclass
 import logging
 import threading
@@ -166,7 +166,7 @@ class Transcriber:
 
         self._model: Optional[WhisperModel] = None
         self._batched_pipeline: Optional[BatchedInferencePipeline] = None
-        self._whisperx_model = None
+        self._whisperx_model: Any = None
         self._whisperx_align_model = None
         self._whisperx_metadata = None
         # The align model is language-specific; remember which language the
@@ -192,7 +192,7 @@ class Transcriber:
         Raises:
             TypeError: An override that is not an __init__ keyword.
         """
-        kwargs = {
+        kwargs: Dict[str, Any] = {
             "model_name": cfg.model,
             "device": cfg.device,
             "compute_type": cfg.compute_type,
@@ -366,10 +366,10 @@ class Transcriber:
             logger.error(f"Failed to download model: {e}")
             raise TranscriptionError(f"Failed to download Whisper model: {e}") from e
 
-    def load_model(self) -> None:
-        """Load Whisper model."""
+    def load_model(self) -> WhisperModel:
+        """Load the Whisper model on first use and return it."""
         if self._model is not None:
-            return
+            return self._model
 
         logger.info(f"Loading Whisper model: {self.model_name} ({self.compute_type})...")
 
@@ -384,6 +384,7 @@ class Transcriber:
             raise TranscriptionError(f"Failed to load model: {e}") from e
 
         logger.info("Model loaded successfully")
+        return self._model
 
     # Values derive from WhisperConfig (rationale there). VAD sets where speech is cut; on-screen
     # feel comes from lead-in/linger — keep the two apart.
@@ -700,7 +701,7 @@ class Transcriber:
         timestamp_config: Optional[TimestampConfig],
     ) -> Tuple[List[SubtitleSegment], TranscriptionInfo]:
         """Transcribe using faster-whisper."""
-        self.load_model()
+        model = self.load_model()
 
         logger.debug("Using faster-whisper for transcription")
 
@@ -711,7 +712,7 @@ class Transcriber:
             # Select inference method
             if batch_size and batch_size > 1:
                 if self._batched_pipeline is None:
-                    self._batched_pipeline = BatchedInferencePipeline(model=self._model)
+                    self._batched_pipeline = BatchedInferencePipeline(model=model)
 
                 segments_iter, info = self._batched_pipeline.transcribe(
                     str(audio_path),
@@ -723,7 +724,7 @@ class Transcriber:
                     vad_parameters=vad_params if vad_filter else None,
                 )
             else:
-                segments_iter, info = self._model.transcribe(
+                segments_iter, info = model.transcribe(
                     str(audio_path),
                     language=language,
                     beam_size=beam_size,
@@ -733,7 +734,7 @@ class Transcriber:
                 )
 
             # Collect all segments with word-level timestamps
-            segments = []
+            segments: List[SubtitleSegment] = []
             for segment in segments_iter:
                 # Extract word-level timestamps if available
                 words = None

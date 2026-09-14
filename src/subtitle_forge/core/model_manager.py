@@ -4,7 +4,7 @@ from dataclasses import dataclass
 from typing import Optional, Callable, Generator, List
 import logging
 
-from ollama import Client, ResponseError
+from ollama import Client, ResponseError, ShowResponse
 
 logger = logging.getLogger(__name__)
 
@@ -207,7 +207,7 @@ class OllamaModelManager:
             logger.error(f"Failed to ensure model: {e}")
             return False
 
-    def get_model_info(self, model: str) -> Optional[dict]:
+    def get_model_info(self, model: str) -> Optional[ShowResponse]:
         """
         Get information about a model.
 
@@ -215,7 +215,7 @@ class OllamaModelManager:
             model: Model name.
 
         Returns:
-            Model info dict or None if not available.
+            Ollama's show() response, or None if not available.
         """
         try:
             return self.client.show(model)

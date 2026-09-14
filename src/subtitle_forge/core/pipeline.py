@@ -221,6 +221,7 @@ def run_pipeline(
                 hooks.on_original_saved(original_srt)
 
         for lang in target_languages:
+            assert translator is not None  # guarded above; restated for the type checker
             if lang == detected_language:
                 if hooks.on_translation_skipped is not None:
                     hooks.on_translation_skipped(lang)

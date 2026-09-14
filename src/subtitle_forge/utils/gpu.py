@@ -21,7 +21,7 @@ def get_available_vram() -> int:
             # against free. The old total - memory_reserved saw only this process and overshot the
             # model choice.
             free_bytes, _total = torch.cuda.mem_get_info(device)
-            return free_bytes // (1024 * 1024)
+            return int(free_bytes // (1024 * 1024))
     except ImportError:
         logger.warning("PyTorch not installed, cannot detect GPU VRAM")
     except Exception as e:
@@ -64,7 +64,7 @@ def check_cuda_available() -> bool:
     try:
         import torch
 
-        return torch.cuda.is_available()
+        return bool(torch.cuda.is_available())
     except ImportError:
         return False
 

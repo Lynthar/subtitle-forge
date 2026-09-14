@@ -2,7 +2,7 @@
 
 import logging
 from pathlib import Path
-from typing import Optional
+from typing import List, Optional
 
 from rich.logging import RichHandler
 
@@ -26,7 +26,7 @@ def setup_logging(
             user's terminal (where Rich would render every third-party
             stack trace) while still writing it all to the log file.
     """
-    handlers = []
+    handlers: List[logging.Handler] = []
 
     # Console handler mirrors `level` unless the caller passes a higher console_level: that keeps
     # the terminal quiet while the file still gets DEBUG (what --save-debug-log wants, since

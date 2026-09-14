@@ -1,12 +1,13 @@
 """Translation module using Ollama."""
 
-from typing import List, Optional, Callable
+from typing import Any, Dict, List, Optional, Callable
 from dataclasses import asdict, dataclass
 import json
 import re
 import logging
 import time
 
+import httpx
 from ollama import Client, ResponseError
 
 from ..models.config import OllamaConfig
@@ -135,15 +136,7 @@ Do not include any text outside the JSON object. Do not omit any indices. Do not
     @property
     def client(self) -> Client:
         if self._client is None:
-            # httpx is a transitive dependency of ollama-python, so it ships alongside it; the
-            # import is deferred only so this module still loads where dependencies are not
-            # installed yet.
-            try:
-                import httpx
-
-                timeout = httpx.Timeout(self.config.request_timeout, connect=10.0)
-            except ImportError:
-                timeout = self.config.request_timeout
+            timeout = httpx.Timeout(self.config.request_timeout, connect=10.0)
             self._client = Client(host=self.config.host, timeout=timeout)
         return self._client
 
@@ -610,7 +603,7 @@ FOLLOWING DIALOGUE (for context, DO NOT translate):
         )
 
         json_mode = self._is_json_mode()
-        chat_kwargs = {
+        chat_kwargs: Dict[str, Any] = {
             "model": self.config.model,
             "messages": [{"role": "user", "content": prompt}],
             "options": {"temperature": self.config.temperature},
@@ -705,13 +698,6 @@ FOLLOWING DIALOGUE (for context, DO NOT translate):
         match on "Timeout"/"Connect" let those escape as raw httpx exceptions
         with no retry at all.
         """
-        try:
-            import httpx
-        except ImportError:
-            name = type(e).__name__
-            return any(
-                token in name for token in ("Timeout", "Connect", "Read", "Write", "Protocol")
-            )
         return isinstance(e, httpx.TransportError)
 
     def _retry_failed_individually(
@@ -863,7 +849,7 @@ FOLLOWING DIALOGUE (for context, DO NOT translate):
 
         try:
             # Categorize failures
-            categorized = {
+            categorized: Dict[str, List[dict]] = {
                 "model_refusal": [],
                 "content_filter": [],
                 "parsing_error": [],

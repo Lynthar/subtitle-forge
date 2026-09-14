@@ -327,6 +327,9 @@ class TranslationProgressTracker:
         }
 
 
+_explainer_shown = False
+
+
 def print_translation_explainer(show_once: bool = True) -> None:
     """
     Print user-friendly explanation of the translation process.
@@ -334,10 +337,10 @@ def print_translation_explainer(show_once: bool = True) -> None:
     Args:
         show_once: Only show once per session (uses module-level flag).
     """
-    # Module-level flag to track if already shown
+    global _explainer_shown
     if _quiet:
         return
-    if show_once and getattr(print_translation_explainer, "_shown", False):
+    if show_once and _explainer_shown:
         return
 
     console.print(
@@ -353,7 +356,7 @@ def print_translation_explainer(show_once: bool = True) -> None:
     )
 
     if show_once:
-        print_translation_explainer._shown = True
+        _explainer_shown = True
 
 
 def print_task_summary(tasks: List[VideoTask]) -> None:
