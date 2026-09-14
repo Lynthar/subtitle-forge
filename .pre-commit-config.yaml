@@ -1,0 +1,7 @@
+# Same ruff as CI: the rule set comes from pyproject.toml, so the two cannot drift.
+repos:
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: v0.16.6
+    hooks:
+      - id: ruff-check
+      - id: ruff-format
