@@ -15,7 +15,7 @@ from subtitle_forge.server import app as server_app  # noqa: E402
 
 @pytest.fixture()
 def client(monkeypatch):
-    monkeypatch.setattr(server_app, "make_processor", lambda config, holder: (lambda job: []))
+    monkeypatch.setattr(server_app, "make_processor", lambda config, holder: lambda job: [])
     config = AppConfig()
     config.output.bilingual = True
     config.output.keep_original = False

@@ -4,7 +4,8 @@
 # (faster_whisper included). PyTorch 2.6 flipped torch.load()'s weights_only default, which
 # breaks pyannote-audio models carrying omegaconf objects. **Never reorder these imports.**
 import os
-os.environ.setdefault('TORCH_FORCE_NO_WEIGHTS_ONLY_LOAD', '1')
+
+os.environ.setdefault("TORCH_FORCE_NO_WEIGHTS_ONLY_LOAD", "1")
 
 from pathlib import Path
 from typing import Optional, List, Tuple, Callable
@@ -21,10 +22,12 @@ from ..exceptions import TranscriptionError
 
 logger = logging.getLogger(__name__)
 
-# Check if WhisperX is available
+# The [whisperx] extra is optional. This binding is unbound when the import fails,
+# so every use of `whisperx` below must stay behind `self.use_whisperx`.
 WHISPERX_AVAILABLE = False
 try:
     import whisperx
+
     WHISPERX_AVAILABLE = True
 except ImportError:
     pass
@@ -48,6 +51,7 @@ def _should_use_whisperx(use_whisperx: bool) -> bool:
 
     return True
 
+
 # Model name to HuggingFace repo mapping
 WHISPER_HF_REPOS = {
     "tiny": "Systran/faster-whisper-tiny",
@@ -68,11 +72,11 @@ WHISPER_HF_REPOS = {
 
 # Approximate model sizes in bytes for progress display
 WHISPER_MODEL_SIZES = {
-    "tiny": 75_000_000,       # ~75MB
+    "tiny": 75_000_000,  # ~75MB
     "tiny.en": 75_000_000,
-    "base": 145_000_000,      # ~145MB
+    "base": 145_000_000,  # ~145MB
     "base.en": 145_000_000,
-    "small": 488_000_000,     # ~488MB
+    "small": 488_000_000,  # ~488MB
     "small.en": 488_000_000,
     "medium": 1_530_000_000,  # ~1.5GB
     "medium.en": 1_530_000_000,
@@ -322,7 +326,10 @@ class Transcriber:
                         if n and ProgressTqdm._progress_callback and self.total:
                             # Throttle callback frequency to prevent flickering
                             now = time.time()
-                            if now - ProgressTqdm._last_update_time >= ProgressTqdm._update_interval:
+                            if (
+                                now - ProgressTqdm._last_update_time
+                                >= ProgressTqdm._update_interval
+                            ):
                                 ProgressTqdm._last_update_time = now
                                 # Use self.n (tqdm's built-in cumulative counter)
                                 ProgressTqdm._progress_callback(self.n, self.total)
@@ -358,7 +365,6 @@ class Transcriber:
         except Exception as e:
             logger.error(f"Failed to download model: {e}")
             raise TranscriptionError(f"Failed to download Whisper model: {e}") from e
-
 
     def load_model(self) -> None:
         """Load Whisper model."""
@@ -513,7 +519,6 @@ class Transcriber:
         timestamp_config: Optional[TimestampConfig],
     ) -> Tuple[List[SubtitleSegment], TranscriptionInfo]:
         """Transcribe using WhisperX with forced alignment."""
-        import whisperx
         import torch
 
         logger.debug("Using WhisperX for transcription with forced alignment")
@@ -539,8 +544,7 @@ class Transcriber:
                 device = "cpu"
                 compute_type = get_optimal_compute_type("cpu")
                 logger.warning(
-                    "CUDA not available, using CPU for WhisperX "
-                    f"(compute_type={compute_type})"
+                    f"CUDA not available, using CPU for WhisperX (compute_type={compute_type})"
                 )
 
             # beam_size is a WhisperX ASR option — it lives in asr_options, not as a transcribe()
@@ -597,9 +601,11 @@ class Transcriber:
                         or self._whisperx_metadata is None
                         or self._whisperx_align_language != detected_language
                     ):
-                        self._whisperx_align_model, self._whisperx_metadata = whisperx.load_align_model(
-                            language_code=detected_language,
-                            device=device,
+                        self._whisperx_align_model, self._whisperx_metadata = (
+                            whisperx.load_align_model(
+                                language_code=detected_language,
+                                device=device,
+                            )
                         )
                         self._whisperx_align_language = detected_language
 
@@ -653,14 +659,19 @@ class Transcriber:
 
             transcription_info = TranscriptionInfo(
                 language=detected_language,
-                language_probability=result.get("language_probability", 1.0) if "language_probability" in result else 1.0,
+                language_probability=result.get("language_probability", 1.0)
+                if "language_probability" in result
+                else 1.0,
                 duration=audio_duration,
             )
 
             # Apply post-processing
             if post_process:
                 segments = self._apply_post_processing(
-                    segments, audio_duration, timestamp_config, audio_path,
+                    segments,
+                    audio_duration,
+                    timestamp_config,
+                    audio_path,
                     language=detected_language,
                 )
 
@@ -766,7 +777,10 @@ class Transcriber:
             # Apply post-processing
             if post_process:
                 segments = self._apply_post_processing(
-                    segments, audio_duration, timestamp_config, audio_path,
+                    segments,
+                    audio_duration,
+                    timestamp_config,
+                    audio_path,
                     language=info.language,
                 )
 

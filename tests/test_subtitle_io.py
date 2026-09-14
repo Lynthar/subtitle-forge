@@ -36,9 +36,7 @@ def test_save_replaces_existing_file(tmp_path):
     out = tmp_path / "video.zh.srt"
     processor = SubtitleProcessor()
     processor.save(_segments(), out)
-    processor.save(
-        [SubtitleSegment(index=1, start=0.0, end=1.0, text="Second write")], out
-    )
+    processor.save([SubtitleSegment(index=1, start=0.0, end=1.0, text="Second write")], out)
     assert processor.load(out)[0].text == "Second write"
 
 

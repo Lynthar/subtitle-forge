@@ -102,9 +102,7 @@ def build_timestamp_config(
     if ts.mode not in valid_modes:
         # Without this, an unknown mode (e.g. a typo'd `--timestamp-mode min`)
         # silently fell through to the "full" branch in TimestampProcessor.
-        raise ValueError(
-            f"Invalid timestamp mode {ts.mode!r}; choose one of {sorted(valid_modes)}"
-        )
+        raise ValueError(f"Invalid timestamp mode {ts.mode!r}; choose one of {sorted(valid_modes)}")
     return ts
 
 
@@ -185,9 +183,7 @@ def run_pipeline(
         validate_language_codes([source_language])
 
     if target_languages and translator is None:
-        raise ValueError(
-            "run_pipeline needs a translator when target_languages is non-empty"
-        )
+        raise ValueError("run_pipeline needs a translator when target_languages is non-empty")
 
     audio_path = extractor.extract(video_path)
     try:
@@ -218,13 +214,9 @@ def run_pipeline(
         outputs: List[PipelineOutput] = []
 
         if keep_original:
-            original_srt = (
-                original_output_path or output_dir / f"{stem}.{detected_language}.srt"
-            )
+            original_srt = original_output_path or output_dir / f"{stem}.{detected_language}.srt"
             subtitle_processor.save(segments, original_srt)
-            outputs.append(
-                PipelineOutput(language=detected_language, path=original_srt)
-            )
+            outputs.append(PipelineOutput(language=detected_language, path=original_srt))
             if hooks.on_original_saved is not None:
                 hooks.on_original_saved(original_srt)
 
@@ -233,9 +225,7 @@ def run_pipeline(
                 if hooks.on_translation_skipped is not None:
                     hooks.on_translation_skipped(lang)
                 else:
-                    logger.info(
-                        "Skipping translation to %s (same as source)", lang
-                    )
+                    logger.info("Skipping translation to %s (same as source)", lang)
                 continue
 
             if hooks.translation_progress_ctx is not None:
@@ -247,9 +237,7 @@ def run_pipeline(
                         progress_callback=progress_cb,
                     )
             else:
-                translated = translator.translate(
-                    segments, detected_language, lang
-                )
+                translated = translator.translate(segments, detected_language, lang)
 
             if bilingual:
                 merged = subtitle_processor.merge_bilingual(
@@ -279,6 +267,4 @@ def run_pipeline(
         try:
             audio_path.unlink(missing_ok=True)
         except OSError as e:
-            logger.warning(
-                "Failed to clean up audio scratch file %s: %s", audio_path, e
-            )
+            logger.warning("Failed to clean up audio scratch file %s: %s", audio_path, e)

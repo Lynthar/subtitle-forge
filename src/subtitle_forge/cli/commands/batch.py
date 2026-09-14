@@ -20,9 +20,7 @@ def find_videos(path: Path, recursive: bool = False) -> List[Path]:
         # case-sensitive filesystems (Linux) `path.glob("*.mp4")` misses ".MP4",
         # so uppercase-extension files were silently skipped.
         entries = path.rglob("*") if recursive else path.glob("*")
-        videos = [
-            p for p in entries if p.is_file() and p.suffix.lower() in VIDEO_EXTENSIONS
-        ]
+        videos = [p for p in entries if p.is_file() and p.suffix.lower() in VIDEO_EXTENSIONS]
 
     return sorted(videos)
 

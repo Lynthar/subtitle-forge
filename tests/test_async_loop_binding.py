@@ -63,9 +63,7 @@ def test_run_batch_sync_completes_and_returns_statuses():
         VideoTask(video_path=Path("b.mp4"), target_langs=["zh"], output_dir=Path(".")),
     ]
     processed = []
-    results = run_batch_sync(
-        tasks, lambda t: processed.append(t.video_path.name), max_workers=2
-    )
+    results = run_batch_sync(tasks, lambda t: processed.append(t.video_path.name), max_workers=2)
     assert [t.status.value for t in results] == ["completed", "completed"]
     assert sorted(processed) == ["a.mp4", "b.mp4"]
 

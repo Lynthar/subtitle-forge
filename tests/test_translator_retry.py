@@ -61,18 +61,14 @@ def _good(indices_to_text):
 
 
 def test_read_error_is_retried():
-    translator, fake = _translator(
-        [httpx.ReadError("connection reset"), _good({"1": "你好"})]
-    )
+    translator, fake = _translator([httpx.ReadError("connection reset"), _good({"1": "你好"})])
     out = translator.translate_batch(_segs("Hello"), "en", "zh")
     assert [s.text for s in out] == ["你好"]
     assert fake.calls == 2
 
 
 def test_read_error_exhausting_retries_raises_translation_error():
-    translator, fake = _translator(
-        [httpx.ReadError("x")] * 3, max_retries=3
-    )
+    translator, fake = _translator([httpx.ReadError("x")] * 3, max_retries=3)
     with pytest.raises(TranslationError):
         translator.translate_batch(_segs("Hello"), "en", "zh")
     assert fake.calls == 3
@@ -86,9 +82,7 @@ def test_client_error_is_not_retried():
 
 
 def test_server_error_is_retried():
-    translator, fake = _translator(
-        [ResponseError("boom", 500), _good({"1": "你好"})]
-    )
+    translator, fake = _translator([ResponseError("boom", 500), _good({"1": "你好"})])
     out = translator.translate_batch(_segs("Hello"), "en", "zh")
     assert [s.text for s in out] == ["你好"]
     assert fake.calls == 2
@@ -104,9 +98,7 @@ def test_unrelated_exception_propagates_unwrapped():
 def test_healed_segment_leaves_no_stale_failure_record():
     # Batch reply drops index 2; the individual retry then succeeds. The
     # failure record made during parsing must go with it.
-    translator, fake = _translator(
-        [_good({"1": "你好"}), "再见"]
-    )
+    translator, fake = _translator([_good({"1": "你好"}), "再见"])
     out = translator.translate_batch(_segs("Hello", "Bye"), "en", "zh")
     assert [s.text for s in out] == ["你好", "再见"]
     assert fake.calls == 2
@@ -116,9 +108,7 @@ def test_healed_segment_leaves_no_stale_failure_record():
 def test_unhealed_segment_keeps_its_failure_record():
     # Batch reply drops index 2 and the individual retry echoes the original
     # (a failed retry) — that record must survive.
-    translator, fake = _translator(
-        [_good({"1": "你好"}), "Bye"]
-    )
+    translator, fake = _translator([_good({"1": "你好"}), "Bye"])
     out = translator.translate_batch(_segs("Hello", "Bye"), "en", "zh")
     assert [s.text for s in out] == ["你好", "Bye"]
     assert [f["index"] for f in translator.get_failed_translations()] == [2]

@@ -7,7 +7,6 @@ import re
 import logging
 import time
 
-import ollama
 from ollama import Client, ResponseError
 
 from ..models.config import OllamaConfig
@@ -68,8 +67,8 @@ Do not include any text outside the JSON object. Do not omit any indices. Do not
 
     # Approximate VRAM requirements for Ollama models (MB)
     OLLAMA_MODEL_VRAM = {
-        "qwen2.5:7b": 5000,    # ~5GB
-        "qwen2.5:14b": 9000,   # ~9GB
+        "qwen2.5:7b": 5000,  # ~5GB
+        "qwen2.5:14b": 9000,  # ~9GB
         "qwen2.5:32b": 20000,  # ~20GB
         "qwen2.5:72b": 45000,  # ~45GB
     }
@@ -141,6 +140,7 @@ Do not include any text outside the JSON object. Do not omit any indices. Do not
             # installed yet.
             try:
                 import httpx
+
                 timeout = httpx.Timeout(self.config.request_timeout, connect=10.0)
             except ImportError:
                 timeout = self.config.request_timeout
@@ -155,10 +155,7 @@ Do not include any text outside the JSON object. Do not omit any indices. Do not
         templates were authored against the legacy [N]-line format and would
         misbehave under format="json".
         """
-        return (
-            self.config.prompt_template is None
-            and self.config.prompt_template_id is None
-        )
+        return self.config.prompt_template is None and self.config.prompt_template_id is None
 
     def _effective_batch_size(self) -> int:
         """
@@ -240,8 +237,7 @@ Do not include any text outside the JSON object. Do not omit any indices. Do not
                 return template.template
             else:
                 logger.warning(
-                    f"Prompt template '{self.config.prompt_template_id}' not found, "
-                    "using default"
+                    f"Prompt template '{self.config.prompt_template_id}' not found, using default"
                 )
 
         # Default
@@ -396,8 +392,12 @@ FOLLOWING DIALOGUE (for context, DO NOT translate):
 
         # Strategy 4: positional fallback — same number of non-empty lines
         if len(index_to_translation) < len(original_segments):
-            lines = [line.strip() for line in response.strip().split('\n') if line.strip()]
-            lines = [line for line in lines if not line.startswith(('#', '-', '*', '翻译', 'Translation'))]
+            lines = [line.strip() for line in response.strip().split("\n") if line.strip()]
+            lines = [
+                line
+                for line in lines
+                if not line.startswith(("#", "-", "*", "翻译", "Translation"))
+            ]
 
             if len(lines) == len(original_segments):
                 for seg, line in zip(original_segments, lines):
@@ -406,7 +406,7 @@ FOLLOWING DIALOGUE (for context, DO NOT translate):
                         # 3: / 3). A bare number plus space or a pure number line is legitimate
                         # content.
                         cleaned = re.sub(
-                            r'^(?:[\[\(]\d+[\]\)][.:：]?|\d+[.:：)])\s*', '', line
+                            r"^(?:[\[\(]\d+[\]\)][.:：]?|\d+[.:：)])\s*", "", line
                         ).strip()
                         if cleaned:
                             index_to_translation[seg.index] = cleaned
@@ -437,12 +437,14 @@ FOLLOWING DIALOGUE (for context, DO NOT translate):
                 self._batch_failure_indices[failure_reason].append(seg.index)
 
                 # Track failed translation for later analysis/log file
-                self._failed_translations.append({
-                    "index": seg.index,
-                    "original": seg.text,
-                    "reason": failure_reason,
-                    "response_snippet": response[:200] if response else "(empty)",
-                })
+                self._failed_translations.append(
+                    {
+                        "index": seg.index,
+                        "original": seg.text,
+                        "reason": failure_reason,
+                        "response_snippet": response[:200] if response else "(empty)",
+                    }
+                )
 
                 translated.append(seg)
 
@@ -513,7 +515,7 @@ FOLLOWING DIALOGUE (for context, DO NOT translate):
         # matched bare digits and corrupted translations beginning with a number. JSON mode skips
         # this.
         if not self._is_json_mode():
-            translated = re.sub(r'^[\[\(]\d+[\]\)]\s*', '', translated)
+            translated = re.sub(r"^[\[\(]\d+[\]\)]\s*", "", translated)
 
         return translated.strip()
 
@@ -535,7 +537,7 @@ FOLLOWING DIALOGUE (for context, DO NOT translate):
             # Drop the opening fence (and optional language tag)
             first_newline = text.find("\n")
             if first_newline != -1:
-                text = text[first_newline + 1:]
+                text = text[first_newline + 1 :]
             # Drop trailing fence
             if text.rstrip().endswith("```"):
                 text = text.rstrip()[:-3]
@@ -566,7 +568,7 @@ FOLLOWING DIALOGUE (for context, DO NOT translate):
             elif ch == "}":
                 depth -= 1
                 if depth == 0:
-                    return text[start:i + 1]
+                    return text[start : i + 1]
         return None
 
     def translate_batch(
@@ -597,7 +599,9 @@ FOLLOWING DIALOGUE (for context, DO NOT translate):
         self._batch_failure_indices = {}
 
         prompt = self._build_translation_prompt(
-            segments, source_lang, target_lang,
+            segments,
+            source_lang,
+            target_lang,
             context_before=context_before,
             context_after=context_after,
         )
@@ -634,14 +638,16 @@ FOLLOWING DIALOGUE (for context, DO NOT translate):
                             # Show first 3 and last 2 with ellipsis
                             idx_str = f"{indices[0]}, {indices[1]}, {indices[2]}...{indices[-2]}, {indices[-1]}"
                         summary_parts.append(f"{reason} [{idx_str}]")
-                    logger.info(f"Batch parse issues, retrying individually: {'; '.join(summary_parts)}")
+                    logger.info(
+                        f"Batch parse issues, retrying individually: {'; '.join(summary_parts)}"
+                    )
 
                 # Failure detection: the translated text is identical to the original AND source !=
                 # target (same language makes identical text a legitimate outcome).
                 failed_segments = [
-                    (i, seg) for i, seg in enumerate(translated)
-                    if seg.text == segments[i].text
-                    and source_lang != target_lang
+                    (i, seg)
+                    for i, seg in enumerate(translated)
+                    if seg.text == segments[i].text and source_lang != target_lang
                 ]
 
                 # Retry ANY failure individually — the old "only if >50% failed" threshold left
@@ -662,11 +668,7 @@ FOLLOWING DIALOGUE (for context, DO NOT translate):
                 # retry — fail immediately. 5xx / 429 / unknown are worth
                 # retrying: a local Ollama restarting or overloaded recovers.
                 status_code = getattr(e, "status_code", None)
-                if (
-                    isinstance(status_code, int)
-                    and 400 <= status_code < 500
-                    and status_code != 429
-                ):
+                if isinstance(status_code, int) and 400 <= status_code < 500 and status_code != 429:
                     raise TranslationError(f"Translation failed: {e}") from e
                 logger.warning(
                     f"Translation request failed "
@@ -674,7 +676,7 @@ FOLLOWING DIALOGUE (for context, DO NOT translate):
                 )
                 if attempt == self.config.max_retries - 1:
                     raise TranslationError(f"Translation failed: {e}") from e
-                time.sleep(min(2 ** attempt, 8))
+                time.sleep(min(2**attempt, 8))
             except Exception as e:
                 if not self._is_retryable_transport_error(e):
                     raise
@@ -686,7 +688,7 @@ FOLLOWING DIALOGUE (for context, DO NOT translate):
                     raise TranslationError(
                         f"Translation failed after {self.config.max_retries} attempts: {e}"
                     ) from e
-                time.sleep(min(2 ** attempt, 8))
+                time.sleep(min(2**attempt, 8))
 
         return segments  # Fallback to original
 
@@ -705,8 +707,7 @@ FOLLOWING DIALOGUE (for context, DO NOT translate):
         except ImportError:
             name = type(e).__name__
             return any(
-                token in name
-                for token in ("Timeout", "Connect", "Read", "Write", "Protocol")
+                token in name for token in ("Timeout", "Connect", "Read", "Write", "Protocol")
             )
         return isinstance(e, httpx.TransportError)
 
@@ -808,14 +809,16 @@ FOLLOWING DIALOGUE (for context, DO NOT translate):
         translated_segments = []
 
         for i in range(0, len(segments), batch_size):
-            batch = segments[i:i + batch_size]
+            batch = segments[i : i + batch_size]
 
             # Get context from surrounding segments
-            context_before = segments[max(0, i - context_window):i]
-            context_after = segments[i + batch_size:i + batch_size + context_window]
+            context_before = segments[max(0, i - context_window) : i]
+            context_after = segments[i + batch_size : i + batch_size + context_window]
 
             translated_batch = self.translate_batch(
-                batch, source_lang, target_lang,
+                batch,
+                source_lang,
+                target_lang,
                 context_before=context_before,
                 context_after=context_after,
             )
@@ -826,8 +829,7 @@ FOLLOWING DIALOGUE (for context, DO NOT translate):
 
         # Count and report failures
         failed_count = sum(
-            1 for orig, trans in zip(segments, translated_segments)
-            if orig.text == trans.text
+            1 for orig, trans in zip(segments, translated_segments) if orig.text == trans.text
         )
 
         if failed_count > 0:

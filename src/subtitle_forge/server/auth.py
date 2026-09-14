@@ -44,7 +44,7 @@ async def require_token(authorization: Optional[str] = Header(None)) -> None:
             headers={"WWW-Authenticate": "Bearer"},
         )
 
-    presented = authorization[len("Bearer "):].strip()
+    presented = authorization[len("Bearer ") :].strip()
     if not secrets.compare_digest(presented, expected):
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,

@@ -6,6 +6,7 @@ from typing import Optional
 
 import typer
 
+
 def translate_subtitle(
     subtitle: Path = typer.Argument(..., help="Subtitle file path (SRT)", exists=True),
     target_lang: str = typer.Option(
@@ -70,9 +71,7 @@ def translate_subtitle(
             source_lang = parts[-1]
             print_info(f"Detected source language from filename: {source_lang}")
         else:
-            print_error(
-                "Cannot detect source language. Please specify with --source-lang"
-            )
+            print_error("Cannot detect source language. Please specify with --source-lang")
             raise typer.Exit(1)
 
     # Translating a file into its own language is a no-op — and with the

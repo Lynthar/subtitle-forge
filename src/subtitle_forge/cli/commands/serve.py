@@ -2,6 +2,7 @@
 
 import typer
 
+
 def serve(
     host: str = typer.Option(
         "127.0.0.1",
@@ -42,8 +43,7 @@ def serve(
         import uvicorn
     except ImportError:
         typer.echo(
-            "ERROR: serve requires the [serve] extra. Install with:\n"
-            "  pip install -e '.[serve]'",
+            "ERROR: serve requires the [serve] extra. Install with:\n  pip install -e '.[serve]'",
             err=True,
         )
         raise typer.Exit(1)
@@ -70,9 +70,7 @@ def serve(
 
     # get_config() (not letting create_app fall back to AppConfig.load()) so
     # the root --config flag reaches the server like every other command.
-    app_instance = create_app(
-        config=get_config(), max_workers=workers, require_auth=not no_auth
-    )
+    app_instance = create_app(config=get_config(), max_workers=workers, require_auth=not no_auth)
 
     uvicorn.run(
         app_instance,

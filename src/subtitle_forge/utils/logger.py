@@ -1,7 +1,6 @@
 """Logging utilities."""
 
 import logging
-import sys
 from pathlib import Path
 from typing import Optional
 
@@ -73,7 +72,7 @@ def setup_logging(
         "faster_whisper",
         "httpx",
         "httpcore",
-        "torio",                  # FFmpeg extension probing fallbacks
+        "torio",  # FFmpeg extension probing fallbacks
         "torch",
         "torchaudio",
         "torio._extension",

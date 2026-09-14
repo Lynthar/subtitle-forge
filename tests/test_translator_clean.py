@@ -16,7 +16,9 @@ def _json_mode_translator():
 
 def _legacy_mode_translator():
     # A custom prompt template forces the legacy [N]-line path.
-    return SubtitleTranslator(TranslationConfig(prompt_template="{source_lang}{target_lang}{segments}"))
+    return SubtitleTranslator(
+        TranslationConfig(prompt_template="{source_lang}{target_lang}{segments}")
+    )
 
 
 def test_json_mode_skips_index_stripping_entirely():

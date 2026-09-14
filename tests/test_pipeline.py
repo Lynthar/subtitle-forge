@@ -135,9 +135,7 @@ def test_bilingual_merges_into_one_file(tmp_path, video, fake_audio):
         bilingual=True,
     )
 
-    assert [(o.language, o.path.name) for o in result.outputs] == [
-        ("en-zh", "clip.en-zh.srt")
-    ]
+    assert [(o.language, o.path.name) for o in result.outputs] == [("en-zh", "clip.en-zh.srt")]
     merged = _read(out_dir / "clip.en-zh.srt")
     assert "Hello there" in merged and "[zh] Hello there" in merged
     assert not (out_dir / "clip.en.srt").exists()
@@ -180,9 +178,7 @@ def test_transcribe_only_needs_no_translator(tmp_path, video, fake_audio):
     assert not fake_audio[0].exists()
 
 
-def test_translation_targets_without_a_translator_fail_before_any_work(
-    tmp_path, video, fake_audio
-):
+def test_translation_targets_without_a_translator_fail_before_any_work(tmp_path, video, fake_audio):
     out_dir = tmp_path / "out"
     out_dir.mkdir()
     transcriber = _FakeTranscriber()

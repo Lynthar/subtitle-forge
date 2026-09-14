@@ -97,7 +97,4 @@ def _run_job(job: Job, config: AppConfig, transcriber: Transcriber) -> list:
     # polling /jobs/{id} see it once transcription completes.
     job.source_language = result.detected_language
 
-    return [
-        {"language": o.language, "path": str(o.path)}
-        for o in result.outputs
-    ]
+    return [{"language": o.language, "path": str(o.path)} for o in result.outputs]

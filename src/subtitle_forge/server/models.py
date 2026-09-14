@@ -9,7 +9,9 @@ from ..core.subtitle import validate_language_codes
 
 
 class JobRequest(BaseModel):
-    video_path: str = Field(..., description="Absolute path to the video file as the server sees it")
+    video_path: str = Field(
+        ..., description="Absolute path to the video file as the server sees it"
+    )
     # Each target language is one full LLM translation pass over the whole
     # video — cap the count so a single request can't queue unbounded work.
     target_languages: List[str] = Field(..., min_length=1, max_length=10)

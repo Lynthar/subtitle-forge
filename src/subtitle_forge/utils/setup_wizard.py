@@ -12,9 +12,6 @@ from rich.panel import Panel
 
 from .progress import (
     download_whisper_with_progress,
-    print_error,
-    print_info,
-    print_warning,
     pull_ollama_with_progress,
 )
 from ..models.config import AppConfig
@@ -41,7 +38,9 @@ def download_whisper_model(whisper_cfg) -> bool:
         download_whisper_with_progress(transcriber)
         return True
     except KeyboardInterrupt:
-        console.print("\n[yellow]Download paused. You can resume later when running subtitle-forge.[/yellow]")
+        console.print(
+            "\n[yellow]Download paused. You can resume later when running subtitle-forge.[/yellow]"
+        )
         return False
     except Exception as e:
         console.print(f"\n[red]Download failed: {e}[/red]")
@@ -89,7 +88,9 @@ def download_ollama_model(host: str, model: str) -> bool:
 
         return True
     except KeyboardInterrupt:
-        console.print("\n[yellow]Download paused. You can resume later with: subtitle-forge config pull-model[/yellow]")
+        console.print(
+            "\n[yellow]Download paused. You can resume later with: subtitle-forge config pull-model[/yellow]"
+        )
         return False
     except Exception as e:
         console.print(f"\n[red]Download failed: {e}[/red]")
@@ -100,14 +101,16 @@ def run_setup_wizard() -> None:
     """Run the interactive setup wizard."""
 
     # Welcome message
-    console.print(Panel(
-        "[bold cyan]Welcome to subtitle-forge![/bold cyan]\n\n"
-        "This tool generates and translates subtitles for your videos\n"
-        "using local AI models - no internet required for processing.\n\n"
-        "Let's make sure everything is set up correctly.",
-        title="Quick Start Guide",
-        border_style="cyan",
-    ))
+    console.print(
+        Panel(
+            "[bold cyan]Welcome to subtitle-forge![/bold cyan]\n\n"
+            "This tool generates and translates subtitles for your videos\n"
+            "using local AI models - no internet required for processing.\n\n"
+            "Let's make sure everything is set up correctly.",
+            title="Quick Start Guide",
+            border_style="cyan",
+        )
+    )
 
     console.print()
     issues_found = []
@@ -138,10 +141,13 @@ def run_setup_wizard() -> None:
     gpu_info = check_gpu()
     if gpu_info.get("cuda_available"):
         console.print(f"  [green]OK[/green] GPU detected: {gpu_info.get('device_name', 'Unknown')}")
-        console.print(f"      VRAM: {gpu_info.get('total_vram_mb', 0)}MB total, {gpu_info.get('available_vram_mb', 0)}MB available")
+        console.print(
+            f"      VRAM: {gpu_info.get('total_vram_mb', 0)}MB total, {gpu_info.get('available_vram_mb', 0)}MB available"
+        )
 
         # Recommend Whisper model based on VRAM
         from ..core.transcriber import Transcriber
+
         recommended_whisper = Transcriber.select_optimal_model()
         console.print(f"      Recommended Whisper model: [cyan]{recommended_whisper}[/cyan]")
 
@@ -215,25 +221,33 @@ def run_setup_wizard() -> None:
         model_size = WHISPER_MODEL_SIZES.get(config.whisper.model, 1_000_000_000)
         model_size_mb = model_size / (1024 * 1024)
 
-        console.print(f"  [yellow]MISSING[/yellow] Whisper model '{config.whisper.model}' not downloaded")
+        console.print(
+            f"  [yellow]MISSING[/yellow] Whisper model '{config.whisper.model}' not downloaded"
+        )
         console.print()
-        console.print(f"  The Whisper model is needed for speech recognition.")
+        console.print("  The Whisper model is needed for speech recognition.")
         console.print(f"  Size: ~{model_size_mb:.0f}MB (one-time download)")
         console.print()
 
         if typer.confirm(f"  Download '{config.whisper.model}' now?", default=True):
             console.print()
-            console.print("  [dim]Tip: If interrupted, it will auto-download when you run subtitle-forge[/dim]")
+            console.print(
+                "  [dim]Tip: If interrupted, it will auto-download when you run subtitle-forge[/dim]"
+            )
             console.print()
 
             if download_whisper_model(config.whisper):
                 console.print()
-                console.print(f"  [green]OK[/green] Whisper model '{config.whisper.model}' downloaded successfully!")
+                console.print(
+                    f"  [green]OK[/green] Whisper model '{config.whisper.model}' downloaded successfully!"
+                )
             else:
                 issues_found.append("whisper-model")
         else:
             console.print()
-            console.print("  [dim]Model will be downloaded automatically when you first run subtitle-forge[/dim]")
+            console.print(
+                "  [dim]Model will be downloaded automatically when you first run subtitle-forge[/dim]"
+            )
 
     console.print()
 
@@ -272,45 +286,55 @@ def run_setup_wizard() -> None:
 
         if typer.confirm(f"  Download '{config.ollama.model}' now?", default=True):
             console.print()
-            console.print("  [dim]Tip: If interrupted, run 'subtitle-forge config pull-model' to resume[/dim]")
+            console.print(
+                "  [dim]Tip: If interrupted, run 'subtitle-forge config pull-model' to resume[/dim]"
+            )
             console.print()
 
             if download_ollama_model(config.ollama.host, config.ollama.model):
                 console.print()
-                console.print(f"  [green]OK[/green] Model '{config.ollama.model}' downloaded successfully!")
+                console.print(
+                    f"  [green]OK[/green] Model '{config.ollama.model}' downloaded successfully!"
+                )
             else:
                 issues_found.append("model")
         else:
             console.print()
-            console.print("  [dim]You can download later with: subtitle-forge config pull-model[/dim]")
+            console.print(
+                "  [dim]You can download later with: subtitle-forge config pull-model[/dim]"
+            )
             issues_found.append("model")
 
     console.print()
 
     # Summary
     if issues_found:
-        console.print(Panel(
-            "[yellow]Setup completed with some issues.[/yellow]\n\n"
-            f"Issues found: {', '.join(issues_found)}\n\n"
-            "Please resolve the issues above before using subtitle-forge.\n"
-            "Run 'subtitle-forge config check' to verify your setup.",
-            title="Setup Status",
-            border_style="yellow",
-        ))
+        console.print(
+            Panel(
+                "[yellow]Setup completed with some issues.[/yellow]\n\n"
+                f"Issues found: {', '.join(issues_found)}\n\n"
+                "Please resolve the issues above before using subtitle-forge.\n"
+                "Run 'subtitle-forge config check' to verify your setup.",
+                title="Setup Status",
+                border_style="yellow",
+            )
+        )
     else:
-        console.print(Panel(
-            "[bold green]Setup Complete![/bold green]\n\n"
-            "Everything is configured and ready to use!\n\n"
-            "[cyan]Quick Start Examples:[/cyan]\n\n"
-            "  # Generate Chinese subtitles for a video\n"
-            "  subtitle-forge process video.mp4 -t zh\n\n"
-            "  # Generate subtitles in multiple languages\n"
-            "  subtitle-forge process video.mp4 -t zh -t ja -t ko\n\n"
-            "  # Create bilingual subtitles (original + translation)\n"
-            "  subtitle-forge process video.mp4 -t zh --bilingual\n\n"
-            "  # Process all videos in a folder\n"
-            "  subtitle-forge batch ./videos/ -t zh\n\n"
-            "[dim]For more options: subtitle-forge --help[/dim]",
-            title="Ready!",
-            border_style="green",
-        ))
+        console.print(
+            Panel(
+                "[bold green]Setup Complete![/bold green]\n\n"
+                "Everything is configured and ready to use!\n\n"
+                "[cyan]Quick Start Examples:[/cyan]\n\n"
+                "  # Generate Chinese subtitles for a video\n"
+                "  subtitle-forge process video.mp4 -t zh\n\n"
+                "  # Generate subtitles in multiple languages\n"
+                "  subtitle-forge process video.mp4 -t zh -t ja -t ko\n\n"
+                "  # Create bilingual subtitles (original + translation)\n"
+                "  subtitle-forge process video.mp4 -t zh --bilingual\n\n"
+                "  # Process all videos in a folder\n"
+                "  subtitle-forge batch ./videos/ -t zh\n\n"
+                "[dim]For more options: subtitle-forge --help[/dim]",
+                title="Ready!",
+                border_style="green",
+            )
+        )

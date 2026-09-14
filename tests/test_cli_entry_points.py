@@ -126,9 +126,7 @@ def test_transcribe_writes_the_output_path_it_was_given(tmp_path, monkeypatch):
     assert not (tmp_path / "clip.en.srt").exists()
 
 
-def test_transcribe_defaults_to_the_detected_language_beside_the_video(
-    tmp_path, monkeypatch
-):
+def test_transcribe_defaults_to_the_detected_language_beside_the_video(tmp_path, monkeypatch):
     _fake_components(monkeypatch)
     video = _video(tmp_path)
 
@@ -226,17 +224,13 @@ def test_translate_falls_back_to_config_bilingual(tmp_path, monkeypatch):
     assert "[zh] Hello there" in (tmp_path / "clip.zh.srt").read_text(encoding="utf-8")
 
 
-def test_batch_rejects_an_invalid_timestamp_mode_before_transcribing(
-    tmp_path, monkeypatch
-):
+def test_batch_rejects_an_invalid_timestamp_mode_before_transcribing(tmp_path, monkeypatch):
     _fake_components(monkeypatch)
     videos = tmp_path / "videos"
     videos.mkdir()
     _video(videos, "a.mp4")
 
-    result = _run(
-        tmp_path, "batch", str(videos), "-t", "zh", "--timestamp-mode", "minimal-ish"
-    )
+    result = _run(tmp_path, "batch", str(videos), "-t", "zh", "--timestamp-mode", "minimal-ish")
 
     assert result.exit_code == 1
     assert transcribe_calls == []

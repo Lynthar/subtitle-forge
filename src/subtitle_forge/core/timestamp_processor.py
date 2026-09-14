@@ -11,11 +11,11 @@ from ..models.subtitle import SubtitleSegment, WordTiming
 logger = logging.getLogger(__name__)
 
 # Sentence-ending patterns for different languages
-SENTENCE_ENDINGS = re.compile(r'([。！？!?\.\n]+)')
+SENTENCE_ENDINGS = re.compile(r"([。！？!?\.\n]+)")
 # Japanese/Chinese specific sentence endings
-CJK_SENTENCE_ENDINGS = re.compile(r'([。！？」』）]+)')
+CJK_SENTENCE_ENDINGS = re.compile(r"([。！？」』）]+)")
 # Pattern to detect sentence-ending punctuation (for word matching)
-SENTENCE_END_CHARS = set('。！？!?.')
+SENTENCE_END_CHARS = set("。！？!?.")
 
 
 @dataclass
@@ -50,15 +50,31 @@ class TimestampProcessor:
     """
 
     # CJK language codes
-    CJK_LANGUAGES = {'zh', 'ja', 'ko', 'chinese', 'japanese', 'korean', 'yue', 'wuu'}
+    CJK_LANGUAGES = {"zh", "ja", "ko", "chinese", "japanese", "korean", "yue", "wuu"}
 
     # Words whose trailing period is an abbreviation, not a sentence boundary.
     # Compared case-insensitively; without this the word-level sentence split
     # cut "Mr. Smith" into two subtitles at "Mr.".
-    NON_SENTENCE_ABBREVIATIONS = frozenset({
-        "mr.", "mrs.", "ms.", "dr.", "prof.", "st.", "sr.", "jr.",
-        "vs.", "etc.", "e.g.", "i.e.", "no.", "a.m.", "p.m.", "u.s.",
-    })
+    NON_SENTENCE_ABBREVIATIONS = frozenset(
+        {
+            "mr.",
+            "mrs.",
+            "ms.",
+            "dr.",
+            "prof.",
+            "st.",
+            "sr.",
+            "jr.",
+            "vs.",
+            "etc.",
+            "e.g.",
+            "i.e.",
+            "no.",
+            "a.m.",
+            "p.m.",
+            "u.s.",
+        }
+    )
 
     def __init__(self, config: TimestampConfig, language: Optional[str] = None):
         """
@@ -472,9 +488,7 @@ class TimestampProcessor:
             result.append(seg)
         return result
 
-    def _ensure_minimum_duration(
-        self, segments: List[SubtitleSegment]
-    ) -> List[SubtitleSegment]:
+    def _ensure_minimum_duration(self, segments: List[SubtitleSegment]) -> List[SubtitleSegment]:
         """Ensure all segments have minimum display duration."""
         result = []
         for seg in segments:
@@ -491,9 +505,7 @@ class TimestampProcessor:
             result.append(seg)
         return result
 
-    def _ensure_minimum_gap(
-        self, segments: List[SubtitleSegment]
-    ) -> List[SubtitleSegment]:
+    def _ensure_minimum_gap(self, segments: List[SubtitleSegment]) -> List[SubtitleSegment]:
         """Ensure minimum gap between consecutive segments."""
         if len(segments) <= 1:
             return segments
@@ -683,7 +695,7 @@ class TimestampProcessor:
         Handles both Western and CJK punctuation.
         """
         # First try CJK sentence endings
-        if any('\u4e00' <= c <= '\u9fff' or '\u3040' <= c <= '\u30ff' for c in text):
+        if any("\u4e00" <= c <= "\u9fff" or "\u3040" <= c <= "\u30ff" for c in text):
             # Contains CJK characters, use CJK pattern
             parts = CJK_SENTENCE_ENDINGS.split(text)
         else:
@@ -716,9 +728,7 @@ class TimestampProcessor:
 
         return sentences if sentences else [text]
 
-    def _extend_segment_end_times(
-        self, segments: List[SubtitleSegment]
-    ) -> List[SubtitleSegment]:
+    def _extend_segment_end_times(self, segments: List[SubtitleSegment]) -> List[SubtitleSegment]:
         """
         Extend segment end times based on text length.
 
@@ -740,10 +750,7 @@ class TimestampProcessor:
             # Calculate minimum required duration based on text length
             # Using language-appropriate reading speed
             chars = len(seg.text)
-            min_required_duration = max(
-                self.min_duration,
-                chars / self._effective_cps
-            )
+            min_required_duration = max(self.min_duration, chars / self._effective_cps)
 
             current_duration = seg.end - seg.start
 
@@ -774,9 +781,7 @@ class TimestampProcessor:
 
         return result
 
-    def _split_by_sentences(
-        self, segments: List[SubtitleSegment]
-    ) -> List[SubtitleSegment]:
+    def _split_by_sentences(self, segments: List[SubtitleSegment]) -> List[SubtitleSegment]:
         """
         Split segments by sentence boundaries using word-level timestamps.
 
@@ -877,7 +882,7 @@ class TimestampProcessor:
         corrected: List[Tuple[str, float, float, Optional[List[WordTiming]]]] = []
 
         for i, (text, start, original_end, words) in enumerate(sentences):
-            is_last = (i == n - 1)
+            is_last = i == n - 1
             # Hard bound for any extension of this sentence's end.
             bound = next_segment_start if is_last else sentences[i + 1][1]
 
@@ -941,9 +946,7 @@ class TimestampProcessor:
             sentence_text = self._join_words(current_text_parts)
             start_time = current_sentence_words[0].start
             end_time = current_sentence_words[-1].end
-            sentences.append(
-                (sentence_text, start_time, end_time, list(current_sentence_words))
-            )
+            sentences.append((sentence_text, start_time, end_time, list(current_sentence_words)))
 
         for word in seg.words:
             word_text = word.word.strip()
@@ -1009,9 +1012,7 @@ class TimestampProcessor:
             # Western: space between words
             return " ".join(words)
 
-    def _split_segment_proportionally(
-        self, seg: SubtitleSegment
-    ) -> List[SubtitleSegment]:
+    def _split_segment_proportionally(self, seg: SubtitleSegment) -> List[SubtitleSegment]:
         """
         Fallback: split segment proportionally when no word timestamps available.
 

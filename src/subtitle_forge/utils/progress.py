@@ -78,9 +78,10 @@ def _quiet_download_logs() -> Iterator[None]:
 
 def download_whisper_with_progress(transcriber: "Transcriber") -> None:
     """Download the transcriber's Whisper model behind a progress bar; download errors propagate."""
-    with _quiet_download_logs(), _download_bar(
-        "Downloading...", transcriber.get_model_size()
-    ) as (progress, task):
+    with (
+        _quiet_download_logs(),
+        _download_bar("Downloading...", transcriber.get_model_size()) as (progress, task),
+    ):
         last_completed = 0
 
         def on_progress(downloaded: int, _total: int) -> None:
@@ -339,15 +340,17 @@ def print_translation_explainer(show_once: bool = True) -> None:
     if show_once and getattr(print_translation_explainer, "_shown", False):
         return
 
-    console.print(Panel(
-        "[cyan]Translation Process[/cyan]\n\n"
-        "Your subtitles are being translated using a local AI model.\n"
-        "This runs entirely on your computer - no internet required.\n\n"
-        "[dim]Progress shows: completed subtitles / total subtitles[/dim]\n"
-        "[dim]Batch processing: subtitles are translated in groups for efficiency[/dim]",
-        title="What's happening?",
-        border_style="blue",
-    ))
+    console.print(
+        Panel(
+            "[cyan]Translation Process[/cyan]\n\n"
+            "Your subtitles are being translated using a local AI model.\n"
+            "This runs entirely on your computer - no internet required.\n\n"
+            "[dim]Progress shows: completed subtitles / total subtitles[/dim]\n"
+            "[dim]Batch processing: subtitles are translated in groups for efficiency[/dim]",
+            title="What's happening?",
+            border_style="blue",
+        )
+    )
 
     if show_once:
         print_translation_explainer._shown = True

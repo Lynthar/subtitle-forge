@@ -171,7 +171,13 @@ class SubtitleProcessor:
         if head in (codecs.BOM_UTF16_LE, codecs.BOM_UTF16_BE):
             encodings_to_try = ["utf-16"]  # the codec consumes the BOM
         else:
-            encodings_to_try = [encoding or self.encoding, "utf-8-sig", "gbk", "gb2312", "iso-8859-1"]
+            encodings_to_try = [
+                encoding or self.encoding,
+                "utf-8-sig",
+                "gbk",
+                "gb2312",
+                "iso-8859-1",
+            ]
 
         for enc in encodings_to_try:
             try:

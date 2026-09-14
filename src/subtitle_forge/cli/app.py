@@ -104,6 +104,7 @@ def main(
     # Wire --quiet / --no-progress into the Rich helpers — before this they
     # were parsed but had no effect on panels or progress bars.
     from ..utils.progress import set_ui_options
+
     set_ui_options(quiet=quiet, no_progress=no_progress)
 
     # Store in context
@@ -249,9 +250,7 @@ def process(
 
         if get_prompt_library().get_template(prompt_template) is None:
             print_error(f"Prompt template not found: {prompt_template}")
-            console.print(
-                "\n[dim]Use 'config list-prompts' to see available templates[/dim]"
-            )
+            console.print("\n[dim]Use 'config list-prompts' to see available templates[/dim]")
             raise typer.Exit(1)
         cfg.ollama.prompt_template_id = prompt_template
 
@@ -278,6 +277,7 @@ def process(
     # Going through build_vad_parameters (not the bare Transcriber.get_vad_parameters, which
     # ignores config) is what makes configured VAD tuning take effect on the CLI too.
     from ..core.pipeline import build_vad_parameters
+
     vad_params = build_vad_parameters(
         cfg,
         mode=vad_mode,
@@ -345,7 +345,9 @@ def process(
                     raise typer.Exit(1)
                 print_info("Model downloaded successfully!\n")
             else:
-                print_error("Translation requires the configured model. Run: subtitle-forge config pull-model")
+                print_error(
+                    "Translation requires the configured model. Run: subtitle-forge config pull-model"
+                )
                 raise typer.Exit(1)
 
         # ========== Phase 2: Main processing (single progress bar) ==========
@@ -401,7 +403,8 @@ def process(
                 print_info(f"Translated subtitles saved: {path}")
 
             result = run_pipeline(
-                video, cfg,
+                video,
+                cfg,
                 transcriber=transcriber,
                 translator=translator,
                 target_languages=target_lang,

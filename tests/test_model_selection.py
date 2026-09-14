@@ -20,20 +20,16 @@ from subtitle_forge.core.transcriber import Transcriber  # noqa: E402
 @pytest.mark.parametrize(
     ("vram_mb", "expected"),
     [
-        (32000, "large-v3"),   # high-end card
-        (8000, "large-v3"),    # exactly enough for the 6000 tier (20% headroom)
-        (6000, "medium"),      # not enough headroom for large-*
+        (32000, "large-v3"),  # high-end card
+        (8000, "large-v3"),  # exactly enough for the 6000 tier (20% headroom)
+        (6000, "medium"),  # not enough headroom for large-*
         (3000, "small"),
-        (0, "small"),          # detection failed -> documented CPU default
+        (0, "small"),  # detection failed -> documented CPU default
     ],
 )
 def test_select_optimal_model_by_vram(monkeypatch, vram_mb, expected):
-    monkeypatch.setattr(
-        "subtitle_forge.utils.gpu.get_available_vram", lambda: vram_mb
-    )
-    monkeypatch.setattr(
-        "subtitle_forge.core.transcriber.get_available_vram", lambda: vram_mb
-    )
+    monkeypatch.setattr("subtitle_forge.utils.gpu.get_available_vram", lambda: vram_mb)
+    monkeypatch.setattr("subtitle_forge.core.transcriber.get_available_vram", lambda: vram_mb)
     assert Transcriber.select_optimal_model() == expected
 
 

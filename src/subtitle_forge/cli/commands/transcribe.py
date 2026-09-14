@@ -5,6 +5,7 @@ from typing import Optional
 
 import typer
 
+
 def transcribe_video(
     video: Path = typer.Argument(..., help="Video file path", exists=True),
     output: Optional[Path] = typer.Option(

@@ -173,7 +173,9 @@ class JobRunner:
                 job.status = "completed"
                 logger.info(
                     "[worker %d] completed job %s (%d outputs)",
-                    idx, job.job_id, len(outputs),
+                    idx,
+                    job.job_id,
+                    len(outputs),
                 )
             except asyncio.CancelledError:
                 # Server shutdown mid-job. Mark failed so the job doesn't sit

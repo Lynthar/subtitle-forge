@@ -207,7 +207,7 @@ def check(
     console.print("\n[bold]GPU Status:[/bold]")
     if check_cuda_available():
         gpu_info = get_gpu_info()
-        console.print(f"  [green]CUDA:[/green] Available")
+        console.print("  [green]CUDA:[/green] Available")
         console.print(f"    GPU: {gpu_info.get('device_name', 'Unknown')}")
         console.print(f"    VRAM Total: {gpu_info.get('total_vram_mb', 0)}MB")
         console.print(f"    VRAM Available: {gpu_info.get('available_vram_mb', 0)}MB")
@@ -215,6 +215,7 @@ def check(
         if verbose:
             try:
                 import torch
+
                 console.print(f"    PyTorch Version: {torch.__version__}")
                 console.print(f"    CUDA Version: {torch.version.cuda}")
             except ImportError:
@@ -234,19 +235,22 @@ def check(
             console.print("    Transcription will use CPU (slower)")
 
         if verbose:
-            console.print("    [dim]To enable GPU acceleration, install CUDA and PyTorch with CUDA support[/dim]")
+            console.print(
+                "    [dim]To enable GPU acceleration, install CUDA and PyTorch with CUDA support[/dim]"
+            )
 
     # Check ffmpeg
     console.print("\n[bold]FFmpeg Status:[/bold]")
     ffmpeg_path = shutil.which("ffmpeg")
     if ffmpeg_path:
-        console.print(f"  [green]ffmpeg:[/green] Found")
+        console.print("  [green]ffmpeg:[/green] Found")
         if verbose:
             console.print(f"    Path: {ffmpeg_path}")
             import subprocess
+
             try:
                 result = subprocess.run(["ffmpeg", "-version"], capture_output=True, text=True)
-                version_line = result.stdout.split('\n')[0] if result.stdout else "Unknown"
+                version_line = result.stdout.split("\n")[0] if result.stdout else "Unknown"
                 console.print(f"    Version: {version_line}")
             except Exception:
                 pass
@@ -266,19 +270,23 @@ def check(
         manager = OllamaModelManager(host=config.ollama.host)
 
         if manager.check_connection():
-            console.print(f"  [green]Connection:[/green] OK")
+            console.print("  [green]Connection:[/green] OK")
             console.print(f"    Host: {config.ollama.host}")
 
             if verbose:
                 available_models = manager.list_models()
-                console.print(f"    Available models: {', '.join(available_models) if available_models else 'None'}")
+                console.print(
+                    f"    Available models: {', '.join(available_models) if available_models else 'None'}"
+                )
 
             # Check configured model
             if manager.is_model_available(config.ollama.model):
                 console.print(f"  [green]Model:[/green] {config.ollama.model} (ready)")
             else:
                 console.print(f"  [yellow]Model:[/yellow] {config.ollama.model} (not downloaded)")
-                console.print(f"    [yellow]Download with:[/yellow] subtitle-forge config pull-model")
+                console.print(
+                    "    [yellow]Download with:[/yellow] subtitle-forge config pull-model"
+                )
                 issues.append(f"Translation model '{config.ollama.model}' not downloaded")
         else:
             console.print("  [red]Connection:[/red] Failed")
@@ -290,6 +298,7 @@ def check(
         console.print(f"  [red]Error:[/red] {e}")
         if verbose:
             import traceback
+
             console.print(f"    [dim]{traceback.format_exc()}[/dim]")
         issues.append(f"Ollama error: {e}")
 
@@ -312,14 +321,17 @@ def check(
             console.print(f"  [green]Model:[/green] {config.whisper.model} (ready)")
         else:
             model_size_mb = transcriber.get_model_size() / (1024 * 1024)
-            console.print(f"  [yellow]Model:[/yellow] {config.whisper.model} (not downloaded, ~{model_size_mb:.0f}MB)")
-            console.print(f"    [dim]Will be downloaded automatically on first use[/dim]")
+            console.print(
+                f"  [yellow]Model:[/yellow] {config.whisper.model} (not downloaded, ~{model_size_mb:.0f}MB)"
+            )
+            console.print("    [dim]Will be downloaded automatically on first use[/dim]")
             issues.append(f"Whisper model '{config.whisper.model}' not downloaded")
 
     except Exception as e:
         console.print(f"  [red]Error:[/red] {e}")
         if verbose:
             import traceback
+
             console.print(f"    [dim]{traceback.format_exc()}[/dim]")
 
     # Recommended model based on VRAM
@@ -327,26 +339,29 @@ def check(
         from ...core.transcriber import Transcriber
 
         recommended = Transcriber.select_optimal_model()
-        console.print(f"\n[bold]Recommendation:[/bold]")
+        console.print("\n[bold]Recommendation:[/bold]")
         console.print(f"  Whisper model: [cyan]{recommended}[/cyan] (based on available VRAM)")
 
     # Summary
     console.print()
     if issues:
-        console.print(Panel(
-            "[yellow]Issues Found:[/yellow]\n\n" +
-            "\n".join(f"  - {issue}" for issue in issues) +
-            "\n\n[dim]Run 'subtitle-forge quickstart' for guided setup[/dim]",
-            title="Status",
-            border_style="yellow",
-        ))
+        console.print(
+            Panel(
+                "[yellow]Issues Found:[/yellow]\n\n"
+                + "\n".join(f"  - {issue}" for issue in issues)
+                + "\n\n[dim]Run 'subtitle-forge quickstart' for guided setup[/dim]",
+                title="Status",
+                border_style="yellow",
+            )
+        )
     else:
-        console.print(Panel(
-            "[green]All systems operational![/green]\n\n"
-            "Ready to process videos.",
-            title="Status",
-            border_style="green",
-        ))
+        console.print(
+            Panel(
+                "[green]All systems operational![/green]\n\nReady to process videos.",
+                title="Status",
+                border_style="green",
+            )
+        )
 
 
 @app.command()
@@ -394,17 +409,18 @@ def pull_model(
         subtitle-forge config pull-model --model qwen2.5:32b
     """
 
-    from ...core.model_manager import OllamaModelManager, format_bytes
+    from ...core.model_manager import OllamaModelManager
 
     config = _load_config()
     target_model = model or config.ollama.model
 
-    console.print(Panel(
-        f"[cyan]Model:[/cyan] {target_model}\n"
-        f"[cyan]Host:[/cyan] {config.ollama.host}",
-        title="Download Configuration",
-        border_style="blue",
-    ))
+    console.print(
+        Panel(
+            f"[cyan]Model:[/cyan] {target_model}\n[cyan]Host:[/cyan] {config.ollama.host}",
+            title="Download Configuration",
+            border_style="blue",
+        )
+    )
 
     manager = OllamaModelManager(host=config.ollama.host)
 
@@ -434,7 +450,9 @@ def pull_model(
         raise typer.Exit(0)
     except Exception as e:
         print_error(f"Download failed: {e}")
-        console.print("\n[yellow]You can try again - download will resume from where it stopped.[/yellow]")
+        console.print(
+            "\n[yellow]You can try again - download will resume from where it stopped.[/yellow]"
+        )
         raise typer.Exit(1)
 
 
@@ -465,11 +483,13 @@ def show_prompt():
     else:
         header, border = f"[cyan]{source}[/cyan]", "cyan"
 
-    console.print(Panel(
-        f"{header}\n\n{prompt}",
-        title="Translation Prompt",
-        border_style=border,
-    ))
+    console.print(
+        Panel(
+            f"{header}\n\n{prompt}",
+            title="Translation Prompt",
+            border_style=border,
+        )
+    )
 
     console.print("\n[bold]Available placeholders:[/bold]")
     console.print("  {source_lang}    - Source language name")
@@ -580,7 +600,9 @@ def export_prompt(
     try:
         output.write_text(prompt, encoding="utf-8")
         print_success(f"Prompt exported to: {output}")
-        console.print("\n[dim]Edit the file and use 'config set-prompt -f <file>' to apply changes[/dim]")
+        console.print(
+            "\n[dim]Edit the file and use 'config set-prompt -f <file>' to apply changes[/dim]"
+        )
     except Exception as e:
         print_error(f"Failed to write file: {e}")
         raise typer.Exit(1)
@@ -662,17 +684,19 @@ def show_prompt_template(
     # Determine source
     source = "Built-in" if library.is_builtin(template_id) else "User-defined"
 
-    console.print(Panel(
-        f"[bold]ID:[/bold] {template.id}\n"
-        f"[bold]Name:[/bold] {template.name}\n"
-        f"[bold]Genre:[/bold] {template.genre}\n"
-        f"[bold]Tags:[/bold] {', '.join(template.tags) if template.tags else 'None'}\n"
-        f"[bold]Source:[/bold] {source}\n\n"
-        f"[bold]Description:[/bold]\n{template.description}\n\n"
-        f"[bold]Template:[/bold]\n[dim]{template.template}[/dim]",
-        title=f"Prompt Template: {template.name}",
-        border_style="cyan",
-    ))
+    console.print(
+        Panel(
+            f"[bold]ID:[/bold] {template.id}\n"
+            f"[bold]Name:[/bold] {template.name}\n"
+            f"[bold]Genre:[/bold] {template.genre}\n"
+            f"[bold]Tags:[/bold] {', '.join(template.tags) if template.tags else 'None'}\n"
+            f"[bold]Source:[/bold] {source}\n\n"
+            f"[bold]Description:[/bold]\n{template.description}\n\n"
+            f"[bold]Template:[/bold]\n[dim]{template.template}[/dim]",
+            title=f"Prompt Template: {template.name}",
+            border_style="cyan",
+        )
+    )
 
 
 @app.command("use-prompt")
@@ -866,7 +890,9 @@ def export_prompt_template(
     try:
         output.write_text(template.template, encoding="utf-8")
         print_success(f"Template '{template.name}' exported to: {output}")
-        console.print(f"\n[dim]Edit and save with: subtitle-forge config save-prompt -f {output} --id my-{template_id} --name \"My {template.name}\"[/dim]")
+        console.print(
+            f'\n[dim]Edit and save with: subtitle-forge config save-prompt -f {output} --id my-{template_id} --name "My {template.name}"[/dim]'
+        )
     except Exception as e:
         print_error(f"Failed to write file: {e}")
         raise typer.Exit(1)

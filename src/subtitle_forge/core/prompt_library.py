@@ -51,7 +51,6 @@ Translated subtitles:""",
         genre="movie",
         tags=["通用", "对话", "电影", "电视剧"],
     ),
-
     # Sci-Fi
     "movie-scifi": PromptTemplate(
         id="movie-scifi",
@@ -74,7 +73,6 @@ Translated subtitles:""",
         genre="movie",
         tags=["科幻", "技术", "未来", "太空"],
     ),
-
     # Fantasy
     "movie-fantasy": PromptTemplate(
         id="movie-fantasy",
@@ -97,7 +95,6 @@ Translated subtitles:""",
         genre="movie",
         tags=["奇幻", "魔法", "史诗", "神话"],
     ),
-
     # Historical
     "movie-historical": PromptTemplate(
         id="movie-historical",
@@ -120,7 +117,6 @@ Translated subtitles:""",
         genre="movie",
         tags=["历史", "古装", "战争", "传记"],
     ),
-
     # Drama/Realistic
     "movie-drama": PromptTemplate(
         id="movie-drama",
@@ -143,7 +139,6 @@ Translated subtitles:""",
         genre="movie",
         tags=["剧情", "现实", "家庭", "情感"],
     ),
-
     # Documentary
     "documentary": PromptTemplate(
         id="documentary",
@@ -166,7 +161,6 @@ Translated subtitles:""",
         genre="documentary",
         tags=["纪录片", "科教", "事实", "自然"],
     ),
-
     # Anime
     "anime": PromptTemplate(
         id="anime",
@@ -189,7 +183,6 @@ Translated subtitles:""",
         genre="anime",
         tags=["动漫", "日本", "动画", "二次元"],
     ),
-
     # Adult content
     "adult": PromptTemplate(
         id="adult",
@@ -212,7 +205,6 @@ Translated subtitles:""",
         genre="adult",
         tags=["成人", "18+"],
     ),
-
     # Technical/Tutorial
     "technical": PromptTemplate(
         id="technical",
@@ -235,7 +227,6 @@ Translated subtitles:""",
         genre="technical",
         tags=["技术", "教程", "编程", "软件"],
     ),
-
     # News
     "news": PromptTemplate(
         id="news",
@@ -308,8 +299,7 @@ class PromptLibrary:
                     self._user_templates[template.id] = template
                 else:
                     logger.warning(
-                        f"Invalid template {file_path}: missing placeholders "
-                        f"{template.validate()}"
+                        f"Invalid template {file_path}: missing placeholders {template.validate()}"
                     )
             except Exception as e:
                 logger.warning(f"Failed to load template {file_path}: {e}")
