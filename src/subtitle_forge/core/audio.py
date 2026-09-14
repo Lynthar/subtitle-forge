@@ -90,37 +90,3 @@ class AudioExtractor:
 
         logger.info(f"Audio extracted: {output_path}")
         return output_path
-
-    def get_duration(self, video_path: Path) -> float:
-        """Get video duration in seconds."""
-        try:
-            probe = ffmpeg.probe(str(video_path))
-            return float(probe["format"]["duration"])
-        except Exception as e:
-            logger.warning(f"Could not get video duration: {e}")
-            return 0.0
-
-    def get_video_info(self, video_path: Path) -> dict:
-        """Get video information."""
-        try:
-            probe = ffmpeg.probe(str(video_path))
-            format_info = probe.get("format", {})
-
-            info = {
-                "duration": float(format_info.get("duration", 0)),
-                "size_mb": int(format_info.get("size", 0)) / (1024 * 1024),
-                "format": format_info.get("format_name", "unknown"),
-            }
-
-            # Get video stream info
-            for stream in probe.get("streams", []):
-                if stream.get("codec_type") == "video":
-                    info["width"] = stream.get("width")
-                    info["height"] = stream.get("height")
-                    info["video_codec"] = stream.get("codec_name")
-                    break
-
-            return info
-        except Exception as e:
-            logger.warning(f"Could not get video info: {e}")
-            return {}
