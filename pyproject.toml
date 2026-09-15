@@ -63,6 +63,11 @@ subtitle-forge = "subtitle_forge.cli.app:cli"
 [project.urls]
 Repository = "https://github.com/Lynthar/subtitle-forge"
 
+[tool.uv]
+# onnxruntime 1.24+ advertises 3.10 in its metadata but ships no cp310 wheel, so the
+# locked 3.10 environment cannot be installed without this ceiling.
+constraint-dependencies = ["onnxruntime<1.24; python_full_version == '3.10.*'"]
+
 [tool.setuptools.packages.find]
 where = ["src"]
 
