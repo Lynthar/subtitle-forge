@@ -48,13 +48,13 @@
 | 组件 | 最低要求 | 推荐配置 |
 |------|---------|---------|
 | **操作系统** | Windows 10 / macOS 10.15 / Ubuntu 20.04 | Windows 11 / macOS 14 / Ubuntu 22.04 |
-| **Python** | 3.9+ | 3.11+ |
+| **Python** | 3.11+ | 3.12+ |
 | **内存** | 8 GB | 16 GB+ |
 | **显卡** | 无（CPU 可运行，较慢） | NVIDIA GPU 6GB+ VRAM |
 | **存储** | 10 GB（模型缓存） | SSD 推荐 |
 
 **必需依赖**：
-- Python 3.9+
+- Python 3.11+
 - ffmpeg
 - Ollama
 

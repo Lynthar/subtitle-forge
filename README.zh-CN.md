@@ -18,7 +18,7 @@ flowchart LR
 
 ## 安装
 
-**没有发布到 PyPI**，需要从源码安装。前置条件：Python 3.9+、PATH 里有 `ffmpeg`、以及
+**没有发布到 PyPI**，需要从源码安装。前置条件：Python 3.11+、PATH 里有 `ffmpeg`、以及
 一个正在运行的 Ollama。
 
 ```bash

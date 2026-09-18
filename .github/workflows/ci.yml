@@ -43,11 +43,9 @@ jobs:
     steps:
       - uses: actions/checkout@v5
 
-      # python_version = "3.9" makes mypy parse installed dependencies with 3.9 syntax; on
-      # 3.10+ the locked huggingface_hub / numpy sources use newer syntax and the run stops early.
       - uses: astral-sh/setup-uv@v10.1.0
         with:
-          python-version: "3.9"
+          python-version: "3.12"
 
       - name: Install the locked dev and serve environment
         run: uv sync --locked --extra dev --extra serve
@@ -62,7 +60,7 @@ jobs:
       fail-fast: false
       matrix:
         # Every version requires-python admits and the classifiers list.
-        python-version: ["3.9", "3.10", "3.11", "3.12"]
+        python-version: ["3.11", "3.12", "3.13"]
     steps:
       - uses: actions/checkout@v5
 

@@ -19,7 +19,7 @@ flowchart LR
 
 ## Install
 
-Not published on PyPI; install from source. Prerequisites: Python 3.9+, `ffmpeg`
+Not published on PyPI; install from source. Prerequisites: Python 3.11+, `ffmpeg`
 on PATH, and a running Ollama.
 
 ```bash

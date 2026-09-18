@@ -8,7 +8,7 @@ name = "subtitle-forge"
 version = "0.1.0"
 description = "Local video subtitle generation and translation CLI tool"
 readme = "README.md"
-requires-python = ">=3.9"
+requires-python = ">=3.11"
 license = "AGPL-3.0-only"
 license-files = ["LICENSE"]
 keywords = ["subtitle", "whisper", "translation", "cli", "ollama"]
@@ -17,10 +17,9 @@ classifiers = [
     "Environment :: Console",
     "Intended Audience :: End Users/Desktop",
     "Programming Language :: Python :: 3",
-    "Programming Language :: Python :: 3.9",
-    "Programming Language :: Python :: 3.10",
     "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
     "Topic :: Multimedia :: Video",
 ]
 
@@ -36,13 +35,13 @@ dependencies = [
 
 [project.optional-dependencies]
 dev = [
-    # pytest 9 needs Python 3.10; the 3.9 floor still gets 8.x. mypy 2 rejects
-    # python_version = "3.9", and ruff's rule set shifts between minors.
-    "pytest>=8,<10",
+    # Upper bounds keep the gate reproducible: ruff's rule set and pytest's
+    # collection behaviour both shift between minor releases.
+    "pytest>=9,<10",
     "pytest-asyncio>=0.21.0",
     "pytest-cov>=4.0.0",
     "ruff>=0.16,<0.17",
-    "mypy>=1.8,<2",
+    "mypy>=1.8,<3",
     "types-PyYAML",
     "types-tqdm",
 ]
@@ -63,25 +62,23 @@ subtitle-forge = "subtitle_forge.cli.app:cli"
 [project.urls]
 Repository = "https://github.com/Lynthar/subtitle-forge"
 
-[tool.uv]
-# onnxruntime 1.24+ advertises 3.10 in its metadata but ships no cp310 wheel, so the
-# locked 3.10 environment cannot be installed without this ceiling.
-constraint-dependencies = ["onnxruntime<1.24; python_full_version == '3.10.*'"]
-
 [tool.setuptools.packages.find]
 where = ["src"]
 
 [tool.ruff]
 line-length = 100
-target-version = "py39"
+target-version = "py311"
 
 [tool.ruff.lint]
 # The gate is this explicit set, not ruff's default set: that one grows with each
-# release and by now flags the typing.List / Optional spelling the py39 floor requires.
+# release, so a ruff upgrade would arrive as a tree-wide diff instead of a finding.
 select = ["E4", "E7", "E9", "F"]
 
 [tool.mypy]
-python_version = "3.9"
+# One minor above the 3.11 floor: mypy parses every installed .pyi at this syntax
+# level and the locked numpy stubs need 3.12. Lowering it halts the run on numpy
+# before src/ is ever checked; the pytest matrix covers 3.11 itself.
+python_version = "3.12"
 warn_return_any = true
 warn_unused_configs = true
 
