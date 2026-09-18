@@ -50,29 +50,19 @@ class JobStore:
     def __init__(self, max_jobs: int = 500):
         self._jobs: "OrderedDict[str, Job]" = OrderedDict()
         self._max = max_jobs
-        # Created lazily inside a running loop: on Python 3.9 asyncio
-        # primitives bind their loop at construction, and this object predates
-        # uvicorn's — an eager Lock() dies "attached to a different loop".
-        self._lock: Optional[asyncio.Lock] = None
-
-    def _get_lock(self) -> asyncio.Lock:
-        # Only called from coroutines; no await between check and set, so this
-        # is race-free within one event loop.
-        if self._lock is None:
-            self._lock = asyncio.Lock()
-        return self._lock
+        self._lock = asyncio.Lock()
 
     async def add(self, job: Job) -> None:
-        async with self._get_lock():
+        async with self._lock:
             self._jobs[job.job_id] = job
             self._evict_if_needed()
 
     async def get(self, job_id: str) -> Optional[Job]:
-        async with self._get_lock():
+        async with self._lock:
             return self._jobs.get(job_id)
 
     async def stats(self) -> dict:
-        async with self._get_lock():
+        async with self._lock:
             pending = sum(1 for j in self._jobs.values() if j.status == "pending")
             processing = sum(1 for j in self._jobs.values() if j.status == "processing")
             return {"pending": pending, "processing": processing, "total": len(self._jobs)}
@@ -98,10 +88,7 @@ class JobRunner:
         self._store = store
         self._processor = processor
         self._max_workers = max_workers
-        # Created in start(): on Python 3.9 an asyncio.Queue binds its loop at
-        # construction, and __init__ predates uvicorn's — workers on the wrong
-        # loop die and every job then sits in 'pending' while /health says 200.
-        self._queue: Optional[asyncio.Queue] = None
+        self._queue: asyncio.Queue = asyncio.Queue()
         self._workers: List[asyncio.Task] = []
         self._running = False
 
@@ -109,7 +96,6 @@ class JobRunner:
         if self._running:
             return
         self._running = True
-        self._queue = asyncio.Queue()
         loop = asyncio.get_running_loop()
         for i in range(self._max_workers):
             worker = loop.create_task(self._worker(i))
@@ -147,15 +133,16 @@ class JobRunner:
         logger.info("JobRunner stopped")
 
     async def submit(self, job: Job) -> None:
-        if self._queue is None:
-            raise RuntimeError("JobRunner.submit() called before start()")
+        # Refuses after stop() as well as before start(): the workers are gone
+        # either way, so an accepted job would sit in 'pending' forever.
+        if not self._running:
+            raise RuntimeError("JobRunner is not running; call start() before submit()")
         await self._store.add(job)
         await self._queue.put(job)
 
     async def _worker(self, idx: int) -> None:
         loop = asyncio.get_running_loop()
         queue = self._queue
-        assert queue is not None  # start() created it before spawning workers
         while True:
             try:
                 job = await queue.get()
@@ -193,7 +180,7 @@ class JobRunner:
 
     @property
     def queue_size(self) -> int:
-        return self._queue.qsize() if self._queue is not None else 0
+        return self._queue.qsize()
 
 
 def new_job_id() -> str:

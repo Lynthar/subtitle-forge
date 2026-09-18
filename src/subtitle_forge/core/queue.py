@@ -35,11 +35,7 @@ class TaskQueue:
         self.on_task_complete = on_task_complete
         self.on_task_error = on_task_error
 
-        # Created in run(): on Python 3.9 an asyncio.Queue binds the loop it is
-        # built on, and this object predates the loop — an eager Queue here
-        # fails at queue.join() with "Future attached to a different loop".
-        self._queue: Optional[asyncio.Queue] = None
-        self._pending: List[VideoTask] = []
+        self._queue: asyncio.Queue = asyncio.Queue()
         self._tasks: List[VideoTask] = []
         self._workers: List[asyncio.Task] = []
         self._running = False
@@ -47,10 +43,7 @@ class TaskQueue:
     def add_task(self, task: VideoTask) -> None:
         """Add task to queue."""
         self._tasks.append(task)
-        if self._queue is not None:
-            self._queue.put_nowait(task)
-        else:
-            self._pending.append(task)
+        self._queue.put_nowait(task)
         logger.debug(f"Task added: {task.video_path.name}")
 
     def add_video(
@@ -88,7 +81,6 @@ class TaskQueue:
     ) -> None:
         """Worker coroutine for processing tasks."""
         queue = self._queue
-        assert queue is not None  # run() created it before spawning workers
         while self._running:
             try:
                 task = await asyncio.wait_for(
@@ -143,13 +135,6 @@ class TaskQueue:
             List of all tasks with results.
         """
         self._running = True
-
-        # Create the queue on the running loop and enqueue everything added
-        # before run() (see __init__ for the Python 3.9 loop-binding trap).
-        self._queue = asyncio.Queue()
-        for task in self._pending:
-            self._queue.put_nowait(task)
-        self._pending.clear()
 
         # Start workers
         self._workers = [
