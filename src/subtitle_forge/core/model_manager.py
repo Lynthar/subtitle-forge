@@ -63,27 +63,28 @@ class OllamaModelManager:
         Returns:
             List of model names.
 
+        Raises:
+            ollama.ResponseError, or the transport error underneath it, when the
+            daemon cannot be asked. Do not fold that into []: an empty list means
+            Ollama answered and holds no models.
+
         Note:
             Ollama API returns ListResponse with models: Sequence[Model]
             where Model.model is the model name (Optional[str]).
             See: https://github.com/ollama/ollama-python/blob/main/ollama/_types.py
         """
-        try:
-            response = self.client.list()
-            # ListResponse has 'models' attribute containing Model objects
-            # Each Model has 'model' field (not 'name') as the model identifier
-            models = getattr(response, "models", []) or []
+        response = self.client.list()
+        # ListResponse has 'models' attribute containing Model objects
+        # Each Model has 'model' field (not 'name') as the model identifier
+        models = getattr(response, "models", []) or []
 
-            result = []
-            for m in models:
-                # Model.model is the actual field name in Ollama's API
-                name = getattr(m, "model", None)
-                if name:
-                    result.append(name)
-            return result
-        except Exception as e:
-            logger.error(f"Failed to list models: {e}")
-            return []
+        result = []
+        for m in models:
+            # Model.model is the actual field name in Ollama's API
+            name = getattr(m, "model", None)
+            if name:
+                result.append(name)
+        return result
 
     def is_model_available(self, model: str) -> bool:
         """
@@ -94,22 +95,21 @@ class OllamaModelManager:
 
         Returns:
             True if model is available.
+
+        Raises:
+            Whatever list_models raises: "cannot ask Ollama" is not "not installed",
+            and a caller that reads it so offers a download that cannot work.
         """
-        try:
-            available_models = self.list_models()
+        available_models = self.list_models()
 
-            # Exact, tag-aware match. The old `model_base in available` substring test reported
-            # "qwen2.5:32b" as installed when only "qwen2.5:7b" was — the download was skipped and
-            # translation died on model-not-found after transcription had already run.
-            def _normalize(name: str) -> str:
-                return name if ":" in name else f"{name}:latest"
+        # Exact, tag-aware match. The old `model_base in available` substring test reported
+        # "qwen2.5:32b" as installed when only "qwen2.5:7b" was — the download was skipped and
+        # translation died on model-not-found after transcription had already run.
+        def _normalize(name: str) -> str:
+            return name if ":" in name else f"{name}:latest"
 
-            target = _normalize(model)
-            return any(_normalize(a) == target for a in available_models)
-
-        except Exception as e:
-            logger.error(f"Failed to check model availability: {e}")
-            return False
+        target = _normalize(model)
+        return any(_normalize(a) == target for a in available_models)
 
     def pull_model(
         self,
@@ -184,7 +184,10 @@ class OllamaModelManager:
             auto_pull: If True, automatically download missing model.
 
         Returns:
-            True if model is ready to use.
+            True if model is ready to use; a failed download is False, not an exception.
+
+        Raises:
+            Whatever list_models raises when the daemon cannot be asked.
         """
         if self.is_model_available(model):
             logger.info(f"Model {model} is already available")
@@ -203,7 +206,7 @@ class OllamaModelManager:
 
             return self.is_model_available(model)
 
-        except Exception as e:
+        except RuntimeError as e:
             logger.error(f"Failed to ensure model: {e}")
             return False
 

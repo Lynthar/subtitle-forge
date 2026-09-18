@@ -6,6 +6,8 @@ is a substring of "qwen2.5:7b"), so the download was skipped and translation
 died with model-not-found only after transcription had already run.
 """
 
+import pytest
+
 from subtitle_forge.core.model_manager import OllamaModelManager
 
 
@@ -38,3 +40,33 @@ def test_no_cross_model_substring_match():
 
 def test_absent_model_is_unavailable():
     assert _manager(["qwen2.5:7b"]).is_model_available("gemma2:9b") is False
+
+
+class _DownClient:
+    """Stands in for ollama.Client when the daemon cannot be reached."""
+
+    def list(self):
+        raise ConnectionError("connection refused")
+
+
+def _manager_with_down_daemon():
+    m = OllamaModelManager()
+    m._client = _DownClient()  # type: ignore[assignment]
+    return m
+
+
+# "Cannot ask Ollama" used to come back as [] and then as False, so every caller read an
+# unreachable daemon as a missing model and offered a download that could not work.
+def test_listing_failure_is_raised_not_an_empty_list():
+    with pytest.raises(ConnectionError):
+        _manager_with_down_daemon().list_models()
+
+
+def test_listing_failure_does_not_read_as_model_missing():
+    with pytest.raises(ConnectionError):
+        _manager_with_down_daemon().is_model_available("qwen2.5:7b")
+
+
+def test_ensure_model_does_not_start_a_download_it_cannot_finish():
+    with pytest.raises(ConnectionError):
+        _manager_with_down_daemon().ensure_model("qwen2.5:7b")

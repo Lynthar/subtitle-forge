@@ -69,6 +69,9 @@ class _FakeTranslator:
     def from_config(cls, cfg, **overrides):
         return cls()
 
+    def check_connection(self):
+        return True
+
     def check_model_available(self):
         return True
 

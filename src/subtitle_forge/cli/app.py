@@ -329,6 +329,12 @@ def process(
             failed_log_path=failed_log_path,
         )
 
+        # Same order as `config pull-model`: an unreachable daemon must not read as a
+        # missing model, or the user is offered a download that cannot work.
+        if not translator.check_connection():
+            print_error(f"Cannot connect to Ollama at {cfg.ollama.host}. Run: ollama serve")
+            raise typer.Exit(1)
+
         # Check and download translation model if needed (separate progress bar)
         if not translator.check_model_available():
             print_warning(f"Translation model '{cfg.ollama.model}' not found")
