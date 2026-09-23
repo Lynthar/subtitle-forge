@@ -227,7 +227,7 @@ def batch_process(
         failed_log_path = None
         if save_debug_log:
             debug_dir = task.output_dir / f"{task.video_path.stem}_debug"
-            debug_dir.mkdir(exist_ok=True)
+            debug_dir.mkdir(parents=True, exist_ok=True)
             failed_log_path = str(debug_dir / "translation_failures.json")
             # console_level="INFO" keeps third-party DEBUG stack traces out of
             # the terminal while the file still captures everything.

@@ -266,7 +266,7 @@ def process(
     debug_failed_log_path = None
     if save_debug_log:
         debug_dir = output_dir / f"{video.stem}_debug"
-        debug_dir.mkdir(exist_ok=True)
+        debug_dir.mkdir(parents=True, exist_ok=True)
         debug_log_path = str(debug_dir / "run.log")
         debug_failed_log_path = str(debug_dir / "translation_failures.json")
         # File handler captures DEBUG; console stays at INFO so the terminal is not flooded with

@@ -130,7 +130,8 @@ class OllamaModelManager:
             DownloadProgress objects with current download state.
 
         Raises:
-            RuntimeError: If download fails.
+            RuntimeError: If download fails, including a stream that ends without
+                the model showing up in the local list.
         """
         logger.info(f"Starting model pull: {model}")
 
@@ -162,12 +163,17 @@ class OllamaModelManager:
                 if status == "success":
                     logger.info(f"Model {model} downloaded successfully")
 
+            installed = self.is_model_available(model)
         except ResponseError as e:
             logger.error(f"Model pull failed: {e}")
             raise RuntimeError(f"Failed to download model {model}: {e}") from e
         except Exception as e:
             logger.error(f"Unexpected error during model pull: {e}")
             raise RuntimeError(f"Download error: {e}") from e
+
+        # A stream can end cleanly without the model landing, success event or not.
+        if not installed:
+            raise RuntimeError(f"Download of model {model} ended but it is not installed")
 
     def ensure_model(
         self,

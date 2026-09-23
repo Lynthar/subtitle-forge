@@ -1,9 +1,6 @@
-"""Tests for _parse_translation_response's fallback chain.
+"""_parse_translation_response's fallback chain: each strategy hands over until every index is in.
 
-Each strategy must hand over to the next until every requested index has a
-translation; a bare count of parsed entries is not enough, because a model
-that renumbers its reply produces the right number of wrong indices.
-"""
+Counting parsed entries is not enough: a reply renumbered from 1 has the right count, wrong keys."""
 
 from subtitle_forge.core.translator import SubtitleTranslator, TranslationConfig
 from subtitle_forge.models.subtitle import SubtitleSegment

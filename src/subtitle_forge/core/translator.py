@@ -146,9 +146,11 @@ Do not include any text outside the JSON object. Do not omit any indices. Do not
 
         We only enable JSON mode for the default prompt — library / custom
         templates were authored against the legacy [N]-line format and would
-        misbehave under format="json".
+        misbehave under format="json". Decided by the template actually in
+        effect, so a dangling library id that falls back to the default prompt
+        stays in JSON mode.
         """
-        return self.config.prompt_template is None and self.config.prompt_template_id is None
+        return self._selected_template() is None
 
     def _effective_batch_size(self) -> int:
         """
@@ -216,25 +218,27 @@ Do not include any text outside the JSON object. Do not omit any indices. Do not
         2. Library template by ID
         3. Default template
         """
+        selected = self._selected_template()
+        if selected is not None:
+            return selected
+        if self.config.prompt_template_id:
+            logger.warning(
+                f"Prompt template '{self.config.prompt_template_id}' not found, using default"
+            )
+        return self.DEFAULT_PROMPT_TEMPLATE
+
+    def _selected_template(self) -> Optional[str]:
+        """The custom or library template body in effect; None means the default applies."""
         # Custom prompt takes precedence (backward compatible)
         if self.config.prompt_template:
             return self.config.prompt_template
-
-        # Library template by ID
         if self.config.prompt_template_id:
             from .prompt_library import get_prompt_library
 
-            library = get_prompt_library()
-            template = library.get_template(self.config.prompt_template_id)
+            template = get_prompt_library().get_template(self.config.prompt_template_id)
             if template:
                 return template.template
-            else:
-                logger.warning(
-                    f"Prompt template '{self.config.prompt_template_id}' not found, using default"
-                )
-
-        # Default
-        return self.DEFAULT_PROMPT_TEMPLATE
+        return None
 
     def get_prompt_template_info(self) -> Optional[str]:
         """

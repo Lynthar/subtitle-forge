@@ -1,14 +1,6 @@
-"""End-to-end contract of `core.pipeline.run_pipeline` with fake components.
+"""Contract of `core.pipeline.run_pipeline` with fake transcriber, translator and extractor.
 
-The shared flow — extract audio, transcribe, save the original, translate each
-target, clean up the scratch file — had no coverage at all, so nothing stopped
-an entry point from quietly growing its own copy of it.
-
-Fake transcriber / translator and a stubbed AudioExtractor; no ffmpeg binary,
-Whisper weights or Ollama needed. Subtitle files are written for real. Importing
-core.pipeline does pull in the ffmpeg-python and faster-whisper packages, so skip
-rather than break the "tests run without torch/whisper installed" contract.
-"""
+Subtitle files are real; skips when ffmpeg-python or faster-whisper is absent (pipeline imports)."""
 
 from pathlib import Path
 

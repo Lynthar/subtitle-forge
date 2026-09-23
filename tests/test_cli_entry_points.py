@@ -1,15 +1,6 @@
-"""What `transcribe` and `batch` actually write, end to end.
+"""The files each CLI entry point writes; Whisper, ffmpeg and Ollama are fakes, SRTs are real.
 
-Both used to carry their own copy of the audio→transcribe→translate→save flow
-and drifted from it: `batch` had no --bilingual / --timestamp-mode /
---split-sentences at all. These tests pin the files each command produces so a
-future divergence shows up as a missing or misnamed output.
-
-Whisper, ffmpeg and Ollama are replaced by fakes; the SRT files are real. The
-modules being patched still import the ffmpeg-python and faster-whisper packages,
-so skip rather than break the "tests run without torch/whisper installed"
-contract.
-"""
+Skips when ffmpeg-python or faster-whisper is absent, since the patched modules import them."""
 
 from pathlib import Path
 from typing import ClassVar
@@ -237,3 +228,27 @@ def test_batch_rejects_an_invalid_timestamp_mode_before_transcribing(tmp_path, m
 
     assert result.exit_code == 1
     assert transcribe_calls == []
+
+
+def test_batch_debug_log_creates_a_new_output_dir(tmp_path, monkeypatch):
+    _fake_components(monkeypatch)
+    video = _video(tmp_path)
+    out = tmp_path / "new" / "subs"
+
+    result = _run(tmp_path, "batch", str(video), "-t", "zh", "-o", str(out), "--save-debug-log")
+
+    assert result.exit_code == 0, result.output
+    assert "[zh] Hello there" in (out / "clip.zh.srt").read_text(encoding="utf-8")
+    assert (out / "clip_debug" / "run.log").exists()
+
+
+def test_process_debug_log_creates_a_new_output_dir(tmp_path, monkeypatch):
+    _fake_components(monkeypatch)
+    video = _video(tmp_path)
+    out = tmp_path / "new" / "subs"
+
+    result = _run(tmp_path, "process", str(video), "-t", "zh", "-o", str(out), "--save-debug-log")
+
+    assert result.exit_code == 0, result.output
+    assert "[zh] Hello there" in (out / "clip.zh.srt").read_text(encoding="utf-8")
+    assert (out / "clip_debug" / "run.log").exists()

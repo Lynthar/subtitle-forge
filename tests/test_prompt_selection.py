@@ -1,25 +1,15 @@
-"""Which prompt the CLI reports, exports and reverts to.
+"""Which prompt the CLI reports, exports and reverts to, and which one the translator runs.
 
-Locks in four fixes around the two-field prompt state (`prompt_template` for a
-custom string, `prompt_template_id` for a library template):
-  * `config reset-prompt` used to clear only the custom field, so after
-    `config use-prompt <id>` it printed "Already using default prompt" and
-    changed nothing — there was no way back to the default at all;
-  * `config show-prompt` / `config export-prompt` read the custom field
-    directly and so reported the default while a library template was live;
-  * `process --prompt-template <id>` accepted an unknown id, which turns JSON
-    mode off yet resolves to the default prompt — the worst parse path — and
-    only after transcription had already run.
-
-No Ollama or Whisper needed: every case stops in argument handling or config I/O.
-"""
+Covers `prompt_template` (custom text) and `prompt_template_id` (library id); no Ollama needed."""
 
 import pytest
 from typer.testing import CliRunner
 
 from subtitle_forge.cli.app import app
 from subtitle_forge.core.prompt_library import get_prompt_library
+from subtitle_forge.core.translator import SubtitleTranslator, TranslationConfig
 from subtitle_forge.models.config import AppConfig
+from subtitle_forge.models.subtitle import SubtitleSegment
 
 runner = CliRunner()
 
@@ -82,8 +72,6 @@ def test_export_prompt_writes_the_selected_library_template(tmp_path):
 
 
 def test_export_prompt_writes_the_default_when_nothing_is_selected(tmp_path):
-    from subtitle_forge.core.translator import SubtitleTranslator
-
     cfg_path = tmp_path / "config.yaml"
     AppConfig().save(cfg_path)
     out = tmp_path / "prompt.txt"
@@ -117,3 +105,27 @@ def test_process_rejects_an_unknown_prompt_template_id(tmp_path, monkeypatch):
     assert result.exit_code == 1
     assert "no-such-template" in result.output
     assert "not found" in result.output
+
+
+class _RecordingClient:
+    def __init__(self, reply):
+        self.reply = reply
+        self.calls = []
+
+    def chat(self, **kwargs):
+        self.calls.append(kwargs)
+        return {"message": {"content": self.reply}}
+
+
+@pytest.mark.parametrize("config", [{}, {"prompt_template_id": "no-such-template"}])
+def test_the_default_prompt_runs_in_json_mode_however_it_was_reached(config):
+    # A dangling id falls back to the default body, so the reply must parse and clean the same way.
+    translator = SubtitleTranslator(TranslationConfig(**config))
+    client = _RecordingClient('{"translations": {"1": "[3] 天后"}}')
+    translator._client = client
+    segment = SubtitleSegment(index=1, start=0.0, end=1.0, text="[3] days later")
+
+    out = translator.translate_batch([segment], "en", "zh")
+
+    assert out[0].text == "[3] 天后"
+    assert client.calls[0].get("format") == "json"
