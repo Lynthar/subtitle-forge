@@ -19,6 +19,7 @@ from ..models.subtitle import SubtitleSegment, WordTiming
 from ..utils.gpu import get_optimal_compute_type, get_available_vram
 from ..exceptions import TranscriptionError
 from .asr import TranscriptionInfo
+from .hf_hub import download_repos
 
 logger = logging.getLogger(__name__)
 
@@ -301,72 +302,17 @@ class Transcriber:
         Args:
             progress_callback: Callback(downloaded_bytes, total_bytes) for progress updates.
         """
-        from huggingface_hub import snapshot_download
-
         repo_id = WHISPER_HF_REPOS.get(self.model_name, self.model_name)
 
         logger.info(f"Downloading Whisper model: {self.model_name} from {repo_id}")
 
         try:
-            if progress_callback:
-                # Create a custom tqdm class that captures progress Must be a proper class (not
-                # lambda) because tqdm_class needs class methods like get_lock()
-                from tqdm.auto import tqdm as base_tqdm
-                import time
-
-                # Use a class factory to inject the callback
-                class ProgressTqdm(base_tqdm):
-                    """Custom tqdm class to capture download progress with throttling."""
-
-                    # Class-level storage (set before instantiation)
-                    _progress_callback = progress_callback
-                    _last_update_time = 0.0
-                    _update_interval = 0.1  # Throttle: max 10 updates per second
-
-                    def __init__(self, *args, **kwargs):
-                        # Disable tqdm's own output to avoid console conflicts with Rich
-                        kwargs.setdefault("disable", True)
-                        super().__init__(*args, **kwargs)
-
-                    def update(self, n=1):
-                        result = super().update(n)
-                        if n and ProgressTqdm._progress_callback and self.total:
-                            # Throttle callback frequency to prevent flickering
-                            now = time.time()
-                            if (
-                                now - ProgressTqdm._last_update_time
-                                >= ProgressTqdm._update_interval
-                            ):
-                                ProgressTqdm._last_update_time = now
-                                # Use self.n (tqdm's built-in cumulative counter)
-                                ProgressTqdm._progress_callback(self.n, self.total)
-                        return result
-
-                # Set environment variable to enable tqdm class instantiation
-                original_tqdm_disable = os.environ.get("HF_HUB_DISABLE_PROGRESS_BARS")
-                os.environ["HF_HUB_DISABLE_PROGRESS_BARS"] = "0"
-
-                try:
-                    snapshot_download(
-                        repo_id,
-                        cache_dir=self.download_root,
-                        local_files_only=False,
-                        tqdm_class=ProgressTqdm,
-                        token=self.hf_token,
-                    )
-                finally:
-                    if original_tqdm_disable is None:
-                        os.environ.pop("HF_HUB_DISABLE_PROGRESS_BARS", None)
-                    else:
-                        os.environ["HF_HUB_DISABLE_PROGRESS_BARS"] = original_tqdm_disable
-            else:
-                snapshot_download(
-                    repo_id,
-                    cache_dir=self.download_root,
-                    local_files_only=False,
-                    token=self.hf_token,
-                )
-
+            download_repos(
+                [repo_id],
+                cache_dir=self.download_root,
+                token=self.hf_token,
+                progress_callback=progress_callback,
+            )
             logger.info(f"Model {self.model_name} downloaded successfully")
 
         except Exception as e:

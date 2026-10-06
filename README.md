@@ -35,6 +35,10 @@ pip install -e '.[whisperx]'   # word-level forced alignment
 pip install -e '.[serve]'      # the HTTP service
 ```
 
+For mostly Chinese, Japanese or Korean audio, `pip install -e '.[qwen3-asr]'` adds
+Qwen3-ASR as an alternative to Whisper; switch with
+`subtitle-forge config set asr.backend qwen3_asr`. Details are in the user guide.
+
 An NVIDIA GPU is not required, but it makes a big difference.
 
 ## Usage

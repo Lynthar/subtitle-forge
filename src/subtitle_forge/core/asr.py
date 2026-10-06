@@ -22,6 +22,8 @@ class TranscriptionInfo:
 class AsrBackend(Protocol):
     """What the pipeline and the entry paths need from a speech recognition backend."""
 
+    model_name: str  # The configured model, for messages
+
     def transcribe(
         self, audio_path: Path, *, language: Optional[str] = None
     ) -> Tuple[List[SubtitleSegment], TranscriptionInfo]:
@@ -55,7 +57,7 @@ class AsrBackend(Protocol):
     def download_model(
         self, progress_callback: Optional[Callable[[int, int], None]] = None
     ) -> None:
-        """Download the model, reporting (downloaded_bytes, total_bytes)."""
+        """Download the model, reporting (downloaded_bytes, total_bytes); total 0 is unknown."""
         ...
 
     def unload_model(self) -> None:
@@ -79,4 +81,8 @@ def create_backend(config: AppConfig, **overrides) -> AsrBackend:
         from .transcriber import Transcriber
 
         return Transcriber.from_config(config.whisper, **overrides)
+    if config.asr.backend == "qwen3_asr":
+        from .qwen3_asr import Qwen3AsrBackend
+
+        return Qwen3AsrBackend.from_config(config.qwen3_asr, **overrides)
     raise ValueError(f"Unknown ASR backend {config.asr.backend!r}")

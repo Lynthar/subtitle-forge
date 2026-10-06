@@ -1,7 +1,7 @@
 """Transcribe command."""
 
 from pathlib import Path
-from typing import Optional
+from typing import Dict, Optional
 
 import typer
 
@@ -24,7 +24,7 @@ def transcribe_video(
         None,
         "--model",
         "-m",
-        help="Whisper model name",
+        help="Speech recognition model name (for the configured asr.backend)",
     ),
     vad_filter: bool = typer.Option(
         True,
@@ -40,7 +40,7 @@ def transcribe_video(
     auto_model: bool = typer.Option(
         False,
         "--auto-model",
-        help="Auto-select model based on GPU VRAM",
+        help="Auto-select the Whisper model based on GPU VRAM",
     ),
     use_whisperx: Optional[bool] = typer.Option(
         None,
@@ -83,18 +83,14 @@ def transcribe_video(
         print_success,
         print_error,
         print_info,
-        download_asr_model_with_progress,
     )
     from ...utils.logger import setup_logging
-    from ..app import get_config
-
-    from rich.console import Console
+    from ..app import get_config, prepare_asr_backend, whisper_flags_apply
 
     # get_config() (not a bare AppConfig.load()) so the root --config flag
     # actually reaches this command.
     config = get_config()
     progress = SubtitleProgress()
-    console = Console()
 
     # Handle --save-debug-log option
     if save_debug_log:
@@ -106,38 +102,28 @@ def transcribe_video(
         # terminal while the file still captures everything (same as process).
         setup_logging("DEBUG", debug_log_path, console_level="INFO")
 
-    # Model selection
-    if auto_model:
-        model_name = Transcriber.select_optimal_model()
-        print_info(f"Auto-selected model: {model_name}")
-    else:
-        model_name = model or config.whisper.model
+    whisper_flags = {
+        "--auto-model": auto_model,
+        "--batch-size": batch_size,
+        "--whisperx/--no-whisperx": use_whisperx,
+    }
+    backend_overrides: Dict[str, object] = {}
+    if model:
+        backend_overrides["model_name"] = model
+    if whisper_flags_apply(config, whisper_flags):
+        if auto_model:
+            backend_overrides["model_name"] = Transcriber.select_optimal_model()
+            print_info(f"Auto-selected model: {backend_overrides['model_name']}")
+        backend_overrides["vad_filter"] = vad_filter
+        if use_whisperx is not None:
+            backend_overrides["use_whisperx"] = use_whisperx
+        if batch_size is not None:
+            backend_overrides["batch_size"] = batch_size
 
     try:
         # ========== Phase 1: Prepare model (outside main progress bar) ==========
-
-        # Determine WhisperX usage
-        whisperx_enabled = use_whisperx if use_whisperx is not None else config.whisper.use_whisperx
-
-        transcriber = create_backend(
-            config,
-            model_name=model_name,
-            use_whisperx=whisperx_enabled,
-            vad_filter=vad_filter,
-            batch_size=config.whisper.batch_size if batch_size is None else batch_size,
-        )
-
-        # Log which backend will be used
-        if isinstance(transcriber, Transcriber) and transcriber.use_whisperx:
-            print_info("Using WhisperX for improved timestamp accuracy")
-
-        # Check and download Whisper model if needed (separate progress bar)
-        if not transcriber.is_model_cached():
-            model_size_mb = transcriber.get_model_size() / (1024 * 1024)
-            console.print(f"\n[cyan]Downloading Whisper model: {model_name}[/cyan]")
-            console.print(f"[dim]Model size: ~{model_size_mb:.0f}MB (one-time download)[/dim]\n")
-            download_asr_model_with_progress(transcriber)
-            print_info("Whisper model downloaded successfully!\n")
+        transcriber = create_backend(config, **backend_overrides)
+        prepare_asr_backend(transcriber)
 
         # ========== Phase 2: Main processing (single progress bar) ==========
 

@@ -1,7 +1,7 @@
 """CLI main application."""
 
 from pathlib import Path
-from typing import Optional, List
+from typing import Dict, List, Mapping, Optional
 
 import typer
 from rich.console import Console
@@ -42,6 +42,37 @@ def get_config() -> AppConfig:
     if _config is None:
         _config = AppConfig.load(_config_path)
     return _config
+
+
+def whisper_flags_apply(cfg: AppConfig, flags: Mapping[str, object]) -> bool:
+    """True under the Whisper backend; otherwise warn about each Whisper-only flag that was set."""
+    if cfg.asr.backend == "whisper":
+        return True
+    given = [name for name, value in flags.items() if value not in (None, False)]
+    if given:
+        from ..utils.progress import print_warning
+
+        print_warning(
+            f"{', '.join(given)}: Whisper-only, ignored under asr.backend {cfg.asr.backend}"
+        )
+    return False
+
+
+def prepare_asr_backend(transcriber) -> None:
+    """Say how the backend will run, and download its model behind a progress bar if missing."""
+    from ..core.transcriber import Transcriber
+    from ..utils.progress import download_asr_model_with_progress, print_info
+
+    if isinstance(transcriber, Transcriber) and transcriber.use_whisperx:
+        print_info("Using WhisperX for improved timestamp accuracy")
+    if not transcriber.is_model_cached():
+        model_size_mb = transcriber.get_model_size() / (1024 * 1024)
+        console.print(
+            f"\n[cyan]Downloading speech recognition model: {transcriber.model_name}[/cyan]"
+        )
+        console.print(f"[dim]Model size: ~{model_size_mb:.0f}MB (one-time download)[/dim]\n")
+        download_asr_model_with_progress(transcriber)
+        print_info("Speech recognition model downloaded.\n")
 
 
 def get_config_path() -> Optional[Path]:
@@ -222,7 +253,7 @@ def process(
         subtitle-forge process video.mp4 -t zh -t ja --bilingual
     """
     from ..core.asr import create_backend
-    from ..core.transcriber import Transcriber, build_vad_parameters
+    from ..core.transcriber import build_vad_parameters
     from ..core.translator import SubtitleTranslator
     from ..utils.progress import (
         SubtitleProgress,
@@ -232,7 +263,6 @@ def process(
         print_info,
         print_warning,
         print_translation_explainer,
-        download_asr_model_with_progress,
         pull_ollama_with_progress,
     )
 
@@ -274,44 +304,32 @@ def process(
         # third-party stack traces (torio's FFmpeg-extension probing, which Rich renders in full).
         setup_logging(level="DEBUG", log_file=debug_log_path, console_level="INFO")
 
-    # Build VAD parameters with the full precedence: CLI flag > --vad-mode preset > config.
-    # Going through build_vad_parameters (not the bare Transcriber.get_vad_parameters, which
-    # ignores config) is what makes configured VAD tuning take effect on the CLI too.
-    vad_params = build_vad_parameters(
-        cfg.whisper,
-        mode=vad_mode,
-        speech_pad_ms=speech_pad,
-        min_silence_duration_ms=min_silence,
-    )
-
     try:
         # ========== Phase 1: Prepare models (outside main progress bar) ==========
 
-        # Determine WhisperX usage
-        whisperx_enabled = use_whisperx if use_whisperx is not None else cfg.whisper.use_whisperx
-
-        # Initialize transcriber
-        # Determine HuggingFace endpoint (CLI option takes precedence)
-        hf_endpoint = hf_mirror or cfg.whisper.hf_endpoint
-
-        transcriber = create_backend(
-            cfg,
-            use_whisperx=whisperx_enabled,
-            hf_endpoint=hf_endpoint,
-            vad_parameters=vad_params,
-        )
-
-        # Log which backend will be used
-        if isinstance(transcriber, Transcriber) and transcriber.use_whisperx:
-            print_info("Using WhisperX for improved timestamp accuracy")
-
-        # Check and download Whisper model if needed (separate progress bar)
-        if not transcriber.is_model_cached():
-            model_size_mb = transcriber.get_model_size() / (1024 * 1024)
-            console.print(f"\n[cyan]Downloading Whisper model: {cfg.whisper.model}[/cyan]")
-            console.print(f"[dim]Model size: ~{model_size_mb:.0f}MB (one-time download)[/dim]\n")
-            download_asr_model_with_progress(transcriber)
-            print_info("Whisper model downloaded successfully!\n")
+        backend_overrides: Dict[str, object] = {}
+        if hf_mirror:
+            backend_overrides["hf_endpoint"] = hf_mirror
+        whisper_flags = {
+            "--whisper-model": whisper_model,
+            "--whisperx/--no-whisperx": use_whisperx,
+            "--vad-mode": vad_mode,
+            "--speech-pad": speech_pad,
+            "--min-silence": min_silence,
+        }
+        if whisper_flags_apply(cfg, whisper_flags):
+            if use_whisperx is not None:
+                backend_overrides["use_whisperx"] = use_whisperx
+            # Full precedence: CLI flag > --vad-mode preset > config. The bare
+            # Transcriber.get_vad_parameters would ignore the configured tuning.
+            backend_overrides["vad_parameters"] = build_vad_parameters(
+                cfg.whisper,
+                mode=vad_mode,
+                speech_pad_ms=speech_pad,
+                min_silence_duration_ms=min_silence,
+            )
+        transcriber = create_backend(cfg, **backend_overrides)
+        prepare_asr_backend(transcriber)
 
         # Initialize translator
         # --save-debug-log implies saving failed log to debug directory

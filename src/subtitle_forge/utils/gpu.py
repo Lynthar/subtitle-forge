@@ -1,6 +1,7 @@
 """GPU detection utilities."""
 
 import logging
+from typing import Any, Dict
 
 logger = logging.getLogger(__name__)
 
@@ -71,7 +72,7 @@ def check_cuda_available() -> bool:
 
 def get_gpu_info() -> dict:
     """Get GPU information."""
-    info = {
+    info: Dict[str, Any] = {
         "cuda_available": False,
         "device_name": None,
         "total_vram_mb": 0,

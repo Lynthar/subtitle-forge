@@ -135,6 +135,7 @@ subtitle-forge quickstart
 | 命令 | 提供的功能 |
 |------|----------|
 | `pip install -e '.[whisperx]'` | **强烈推荐**。WhisperX 用 wav2vec2 强制对齐，词级时间戳精度比基础 faster-whisper 高很多，直接影响字幕同步感 |
+| `pip install -e '.[qwen3-asr]'` | 可选的 Qwen3-ASR 语音识别后端，中日韩识别更强，见[下文](#qwen3-asr语音识别可选后端) |
 | `pip install -e '.[serve]'` | 启用 HTTP 服务模式（`subtitle-forge serve`），加 fastapi + uvicorn |
 | `pip install -e '.[dev]'` | 开发依赖：pytest / ruff / mypy |
 
@@ -243,6 +244,34 @@ subtitle-forge config set whisper.model large-v3
 # 自动选择
 subtitle-forge transcribe video.mp4 --auto-model
 ```
+
+### Qwen3-ASR（语音识别，可选后端）
+
+默认后端是 Whisper。片源以中文、日语、韩语为主时可以换成 Qwen3-ASR：
+它负责识别，配套的 Qwen3-ForcedAligner 负责词级时间轴，两者都在本地运行。
+
+```bash
+pip install -e '.[qwen3-asr]'
+subtitle-forge config set asr.backend qwen3_asr
+```
+
+| 配置项 | 默认 | 说明 |
+|------|------|------|
+| `qwen3_asr.model` | `Qwen/Qwen3-ASR-1.7B` | 约 4.7 GB；显存紧张换 `Qwen/Qwen3-ASR-0.6B`（约 1.9 GB） |
+| `qwen3_asr.aligner_model` | `Qwen/Qwen3-ForcedAligner-0.6B` | 约 1.8 GB，提供词级时间轴 |
+| `qwen3_asr.device` | `cuda` | `cuda` 或 `cpu`；没有 CUDA 时自动退到 CPU 并提示 |
+| `qwen3_asr.batch_size` | `4` | 音频按约 3 分钟一块切开，每批推理这么多块；显存不够就调小 |
+
+需要知道的几点：
+
+- **识别覆盖 30 种语言，时间轴对齐只覆盖 11 种**：中、英、粤、法、德、意、日、韩、葡、俄、西。
+  其余语言能识别，但字幕时间可能不准，运行时会提示。
+- **建议装 FlashAttention 2**（`flash-attn`，需要 CUDA）。没有它时，超过约 8 秒的片段识别准确度会下降；
+  程序照常运行，但启动时会给出警告。flash-attn 在 Windows 上没有官方安装包，多数 Windows 用户会看到这条警告。
+- **不报告语种识别的置信度**，处理结果里只显示语言码。
+- **Whisper 专属的参数不起作用**：`--whisperx`、`--vad-mode`、`--speech-pad`、`--min-silence`、
+  `--auto-model`、`--batch-size`、`--whisper-model`。给了会提示「已忽略」。`transcribe --model` 对两个后端都有效。
+- 显存需求按权重估算：1.7B 组合约 6.5 GB 权重，0.6B 组合约 3.7 GB，实际还要加上推理开销，未实测。
 
 ### Ollama 模型（翻译）
 
@@ -425,7 +454,7 @@ subtitle-forge config check --verbose
 
 ```yaml
 asr:
-  backend: whisper               # 语音识别后端，设置写在同名的一节里；目前只有 whisper
+  backend: whisper               # 语音识别后端：whisper 或 qwen3_asr，设置写在同名的一节里
 
 whisper:
   model: large-v3                # Whisper 模型

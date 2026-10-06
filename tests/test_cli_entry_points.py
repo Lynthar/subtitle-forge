@@ -252,3 +252,25 @@ def test_process_debug_log_creates_a_new_output_dir(tmp_path, monkeypatch):
     assert result.exit_code == 0, result.output
     assert "[zh] Hello there" in (out / "clip.zh.srt").read_text(encoding="utf-8")
     assert (out / "clip_debug" / "run.log").exists()
+
+
+def test_whisper_only_flags_are_reported_and_dropped_under_another_backend(tmp_path, monkeypatch):
+    _fake_components(monkeypatch)
+    built = []
+    monkeypatch.setattr(
+        asr_module, "create_backend", lambda config, **o: built.append(o) or _FakeTranscriber()
+    )
+    (tmp_path / "config.yaml").write_text("asr:\n  backend: qwen3_asr\n", encoding="utf-8")
+
+    result = _run(
+        tmp_path,
+        "transcribe",
+        str(_video(tmp_path)),
+        "--whisperx",
+        "--model",
+        "Qwen/Qwen3-ASR-0.6B",
+    )
+
+    assert result.exit_code == 0, result.output
+    assert "Whisper-only" in result.output
+    assert built == [{"model_name": "Qwen/Qwen3-ASR-0.6B"}]

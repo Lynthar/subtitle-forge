@@ -8,7 +8,7 @@
 
 asr:
   # Speech recognition backend; its settings live in the section of the same name below
-  # Options: whisper
+  # Options: whisper, qwen3_asr
   backend: whisper
 
 whisper:
@@ -47,6 +47,32 @@ whisper:
   # WhisperX (better word-level alignment, requires the [whisperx] extra)
   use_whisperx: true
   whisperx_align: true
+
+  # HuggingFace token, only needed for gated / private model repos
+  hf_token: null
+
+  # HuggingFace mirror (e.g. https://hf-mirror.com); sets HF_ENDPOINT for the whole process
+  hf_endpoint: null
+
+qwen3_asr:
+  # Qwen3-ASR (requires the [qwen3-asr] extra). Strong on Chinese / Japanese / Korean;
+  # 30 languages. Alternative: Qwen/Qwen3-ASR-0.6B (~1.9GB instead of ~4.7GB)
+  model: Qwen/Qwen3-ASR-1.7B
+
+  # Forced aligner that supplies word timing (~1.8GB); it aligns 11 languages:
+  # zh, en, yue, fr, de, it, ja, ko, pt, ru, es
+  aligner_model: Qwen/Qwen3-ForcedAligner-0.6B
+
+  # Device: cuda or cpu. Without FlashAttention 2 (flash-attn) installed, clips longer
+  # than ~8s encode with reduced accuracy; a warning says so at load time.
+  device: cuda
+
+  # Audio is cut into ~3-minute chunks; this many run per inference batch.
+  # Lower it if the GPU runs out of memory.
+  batch_size: 4
+
+  # Model cache directory (null = the HuggingFace default under ~/.cache)
+  download_root: null
 
   # HuggingFace token, only needed for gated / private model repos
   hf_token: null

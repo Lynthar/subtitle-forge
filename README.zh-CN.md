@@ -34,6 +34,9 @@ pip install -e '.[whisperx]'   # 逐词强制对齐
 pip install -e '.[serve]'      # HTTP 服务
 ```
 
+片源以中文、日语、韩语为主时，`pip install -e '.[qwen3-asr]'` 可以装上 Qwen3-ASR 代替 Whisper，
+再用 `subtitle-forge config set asr.backend qwen3_asr` 切换。细节见用户手册。
+
 NVIDIA 显卡不是必需的，但有没有它差别很大。
 
 ## 用法

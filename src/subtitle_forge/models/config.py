@@ -10,7 +10,7 @@ from typing import Optional, Tuple
 import yaml
 
 # Backends core.asr.create_backend can build; each one reads the config section of the same name.
-ASR_BACKENDS = ("whisper",)
+ASR_BACKENDS = ("whisper", "qwen3_asr")
 
 
 @dataclass
@@ -66,6 +66,20 @@ class WhisperConfig:
 
 
 @dataclass
+class Qwen3AsrConfig:
+    """Qwen3-ASR transcription configuration (the [qwen3-asr] extra)."""
+
+    model: str = "Qwen/Qwen3-ASR-1.7B"
+    # Supplies the word timing; without it Qwen3-ASR has no timestamps at all.
+    aligner_model: str = "Qwen/Qwen3-ForcedAligner-0.6B"
+    device: str = "cuda"
+    batch_size: int = 4  # 3-minute audio chunks per inference batch; lower it on small GPUs
+    download_root: Optional[str] = None
+    hf_token: Optional[str] = None
+    hf_endpoint: Optional[str] = None
+
+
+@dataclass
 class OllamaConfig:
     """Ollama translation configuration."""
 
@@ -107,6 +121,7 @@ class AppConfig:
 
     asr: AsrConfig = field(default_factory=AsrConfig)
     whisper: WhisperConfig = field(default_factory=WhisperConfig)
+    qwen3_asr: Qwen3AsrConfig = field(default_factory=Qwen3AsrConfig)
     ollama: OllamaConfig = field(default_factory=OllamaConfig)
     output: OutputConfig = field(default_factory=OutputConfig)
     timestamp: TimestampConfig = field(default_factory=TimestampConfig)
@@ -172,6 +187,10 @@ class AppConfig:
             errors.append(f"timestamp.mode must be one of off/minimal/full, got {ts.mode!r}")
         if wh.device not in ("cuda", "cpu", "auto"):
             errors.append(f"whisper.device must be one of cuda/cpu/auto, got {wh.device!r}")
+        if self.qwen3_asr.device not in ("cuda", "cpu"):
+            errors.append(
+                f"qwen3_asr.device must be one of cuda/cpu, got {self.qwen3_asr.device!r}"
+            )
         if self.log_level not in ("DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"):
             errors.append(
                 f"log_level must be one of DEBUG/INFO/WARNING/ERROR/CRITICAL, got {self.log_level!r}"
@@ -198,6 +217,7 @@ class AppConfig:
         at_least_one = [
             ("timestamp.split_threshold", ts.split_threshold),
             ("whisper.beam_size", wh.beam_size),
+            ("qwen3_asr.batch_size", self.qwen3_asr.batch_size),
             ("ollama.max_batch_size", ol.max_batch_size),
             ("ollama.max_retries", ol.max_retries),
             ("max_workers", self.max_workers),

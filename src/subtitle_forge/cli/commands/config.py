@@ -311,21 +311,22 @@ def check(
         console.print(f"  Max Workers: {config.max_workers}")
         console.print(f"  Config Path: {_config_file_display()}")
 
-    # Check Whisper model
-    console.print("\n[bold]Whisper Status:[/bold]")
+    # Check the configured backend's speech recognition model
+    console.print(f"\n[bold]Speech Recognition ({config.asr.backend}):[/bold]")
     try:
         from ...core.asr import create_backend
 
         transcriber = create_backend(config)
+        model = transcriber.model_name
         if transcriber.is_model_cached():
-            console.print(f"  [green]Model:[/green] {config.whisper.model} (ready)")
+            console.print(f"  [green]Model:[/green] {model} (ready)")
         else:
             model_size_mb = transcriber.get_model_size() / (1024 * 1024)
             console.print(
-                f"  [yellow]Model:[/yellow] {config.whisper.model} (not downloaded, ~{model_size_mb:.0f}MB)"
+                f"  [yellow]Model:[/yellow] {model} (not downloaded, ~{model_size_mb:.0f}MB)"
             )
             console.print("    [dim]Will be downloaded automatically on first use[/dim]")
-            issues.append(f"Whisper model '{config.whisper.model}' not downloaded")
+            issues.append(f"Speech recognition model '{model}' not downloaded")
 
     except Exception as e:
         console.print(f"  [red]Error:[/red] {e}")

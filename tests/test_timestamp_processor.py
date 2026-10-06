@@ -10,7 +10,11 @@ The module is pure/functional and has no heavy dependencies, so these run
 without ffmpeg / torch / whisper.
 """
 
-from subtitle_forge.core.timestamp_processor import TimestampProcessor, display_cells
+from subtitle_forge.core.timestamp_processor import (
+    TimestampProcessor,
+    display_cells,
+    is_sentence_end,
+)
 from subtitle_forge.models.config import TimestampConfig
 from subtitle_forge.models.subtitle import SubtitleSegment, WordTiming
 
@@ -164,11 +168,10 @@ def test_text_split_keeps_abbreviations_with_their_sentence():
 
 
 def test_abbreviations_are_not_sentence_ends():
-    proc = _proc(mode="off")
     for word in ("Mr.", "Dr.", "MRS.", "vs.", "J."):
-        assert proc._is_sentence_end(word) is False, word
-    for word in ("stop.", "done!", "really?", "だ。"):
-        assert proc._is_sentence_end(word) is True, word
+        assert is_sentence_end(word) is False, word
+    for word in ("stop.", "done!", "really?", "だ。", 'go."', "行くよ。」", "(fine.)"):
+        assert is_sentence_end(word) is True, word
 
 
 def test_display_cells_counts_wide_characters_twice():

@@ -17,6 +17,51 @@ SENTENCE_ENDINGS = re.compile(r"([。！？!?\.\n]+)")
 CJK_SENTENCE_ENDINGS = re.compile(r"([。！？」』）]+)")
 # Pattern to detect sentence-ending punctuation (for word matching)
 SENTENCE_END_CHARS = set("。！？!?.")
+# Closing quotes and brackets that may follow a sentence's end: 'said "Go."', 「行くよ。」
+CLOSING_CHARS = set("\"'”’」』）)]》")
+
+
+# Words whose trailing period is an abbreviation, not a sentence boundary.
+# Compared case-insensitively; without this the word-level sentence split
+# cut "Mr. Smith" into two subtitles at "Mr.".
+NON_SENTENCE_ABBREVIATIONS = frozenset(
+    {
+        "mr.",
+        "mrs.",
+        "ms.",
+        "dr.",
+        "prof.",
+        "st.",
+        "sr.",
+        "jr.",
+        "vs.",
+        "etc.",
+        "e.g.",
+        "i.e.",
+        "no.",
+        "a.m.",
+        "p.m.",
+        "u.s.",
+    }
+)
+
+
+def is_sentence_end(word: str) -> bool:
+    """Check if a word ends with sentence-ending punctuation."""
+    if not word:
+        return False
+    token = word.strip().lower()
+    if token in NON_SENTENCE_ABBREVIATIONS:
+        return False
+    # A single-letter initial ("J." in "J. Smith") is part of a name.
+    if len(token) == 2 and token.endswith(".") and token[0].isalpha():
+        return False
+    for char in reversed(word):
+        if char in SENTENCE_END_CHARS:
+            return True
+        if not char.isspace() and char not in CLOSING_CHARS:
+            break
+    return False
 
 
 def display_cells(text: str) -> int:
@@ -59,30 +104,6 @@ class TimestampProcessor:
 
     # CJK language codes
     CJK_LANGUAGES = {"zh", "ja", "ko", "chinese", "japanese", "korean", "yue", "wuu"}
-
-    # Words whose trailing period is an abbreviation, not a sentence boundary.
-    # Compared case-insensitively; without this the word-level sentence split
-    # cut "Mr. Smith" into two subtitles at "Mr.".
-    NON_SENTENCE_ABBREVIATIONS = frozenset(
-        {
-            "mr.",
-            "mrs.",
-            "ms.",
-            "dr.",
-            "prof.",
-            "st.",
-            "sr.",
-            "jr.",
-            "vs.",
-            "etc.",
-            "e.g.",
-            "i.e.",
-            "no.",
-            "a.m.",
-            "p.m.",
-            "u.s.",
-        }
-    )
 
     def __init__(self, config: TimestampConfig, language: Optional[str] = None):
         """
@@ -744,7 +765,7 @@ class TimestampProcessor:
                 # unavailable this is the only splitter that runs, so an
                 # unguarded "Mr." becomes a 0.18s cue of its own.
                 tokens = current.split()
-                if tokens and not self._is_sentence_end(tokens[-1]):
+                if tokens and not is_sentence_end(tokens[-1]):
                     continue
                 if current.strip():
                     sentences.append(current.strip())
@@ -997,7 +1018,7 @@ class TimestampProcessor:
             prev_word_end = word.end
 
             # Check if this word ends with sentence-ending punctuation
-            if self._is_sentence_end(word_text):
+            if is_sentence_end(word_text):
                 flush()
                 current_sentence_words = []
                 current_text_parts = []
@@ -1007,24 +1028,6 @@ class TimestampProcessor:
         flush()
 
         return sentences if sentences else [(seg.text, seg.start, seg.end, list(seg.words))]
-
-    def _is_sentence_end(self, word: str) -> bool:
-        """Check if a word ends with sentence-ending punctuation."""
-        if not word:
-            return False
-        token = word.strip().lower()
-        if token in self.NON_SENTENCE_ABBREVIATIONS:
-            return False
-        # A single-letter initial ("J." in "J. Smith") is part of a name.
-        if len(token) == 2 and token.endswith(".") and token[0].isalpha():
-            return False
-        # Check the last character (or last few for multi-char endings)
-        for char in reversed(word):
-            if char in SENTENCE_END_CHARS:
-                return True
-            if not char.isspace():
-                break
-        return False
 
     def _join_words(self, words: List[str]) -> str:
         """
