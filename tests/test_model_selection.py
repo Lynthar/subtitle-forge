@@ -24,7 +24,7 @@ from subtitle_forge.core.transcriber import Transcriber  # noqa: E402
         (8000, "large-v3"),  # exactly enough for the 6000 tier (20% headroom)
         (6000, "medium"),  # not enough headroom for large-*
         (3000, "small"),
-        (0, "small"),  # detection failed -> documented CPU default
+        (0, None),  # detection failed -> no recommendation; the caller decides
     ],
 )
 def test_select_optimal_model_by_vram(monkeypatch, vram_mb, expected):

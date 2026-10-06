@@ -148,7 +148,9 @@ def run_setup_wizard() -> None:
         # Recommend Whisper model based on VRAM
         from ..core.transcriber import Transcriber
 
-        recommended_whisper = Transcriber.select_optimal_model()
+        gpu_config = AppConfig.load()
+        # Unreadable free VRAM recommends no change.
+        recommended_whisper = Transcriber.select_optimal_model() or gpu_config.whisper.model
         console.print(f"      Recommended Whisper model: [cyan]{recommended_whisper}[/cyan]")
 
         # Recommend translation model based on VRAM
@@ -164,7 +166,6 @@ def run_setup_wizard() -> None:
         # Offer to persist the recommendation. Without this the wizard said
         # "recommended: 7b" and then step 3/5 prompted to download the
         # config defaults (large-v3 + 14b) anyway — an OOM trap on small GPUs.
-        gpu_config = AppConfig.load()
         if (
             recommended_whisper != gpu_config.whisper.model
             or recommended_ollama != gpu_config.ollama.model

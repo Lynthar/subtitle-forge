@@ -2,11 +2,12 @@
 
 Kept free of model imports: backends load lazily, so importing this pulls in no torch."""
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Callable, List, Optional, Protocol, Tuple
 
 from ..models.config import AppConfig
+from ..models.degradation import Degradation
 from ..models.subtitle import SubtitleSegment
 
 
@@ -17,6 +18,8 @@ class TranscriptionInfo:
     language: str  # Code of the transcribed language, e.g. "en"
     language_probability: Optional[float]  # None when the backend reports no confidence
     duration: float  # Audio length in seconds; 0.0 when unknown
+    # Every fallback this run took, standing ones (a missing package, no GPU) included.
+    degradations: List[Degradation] = field(default_factory=list)
 
 
 class AsrBackend(Protocol):
@@ -37,6 +40,7 @@ class AsrBackend(Protocol):
             Chronological segments numbered from 1, carrying ``words`` when the backend
             has word timing, and the run's metadata. Timing is raw: the caller runs the
             timestamp post-processing, so a backend that applies it too applies it twice.
+            Every fallback goes in ``degradations``; one only logged reaches no result.
 
         Raises:
             TranscriptionError: Recognition failed.

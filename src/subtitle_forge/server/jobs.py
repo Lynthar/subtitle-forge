@@ -15,6 +15,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Callable, List, Optional
 
+from ..models.degradation import Degradation
+
 logger = logging.getLogger(__name__)
 
 
@@ -37,6 +39,7 @@ class Job:
     completed_at: Optional[datetime] = None
     error: Optional[str] = None
     outputs: List[dict] = field(default_factory=list)
+    degradations: List[Degradation] = field(default_factory=list)
 
 
 class JobStore:

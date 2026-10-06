@@ -21,6 +21,7 @@ from typing import Callable, ContextManager, Dict, List, Optional
 
 from ..exceptions import SubtitleError
 from ..models.config import AppConfig, TimestampConfig
+from ..models.degradation import Degradation
 from ..models.subtitle import SubtitleSegment
 from .asr import AsrBackend
 from .audio import AudioExtractor
@@ -53,6 +54,8 @@ class PipelineResult:
     language_probability: Optional[float]
     segment_count: int
     outputs: List[PipelineOutput] = field(default_factory=list)
+    # The backend's fallbacks, then one per target language left partly untranslated.
+    degradations: List[Degradation] = field(default_factory=list)
 
     def describe_language(self) -> str:
         """The detected language, with the backend's confidence when it reports one."""
@@ -229,6 +232,7 @@ def run_pipeline(
             hooks.on_transcribe_complete(len(segments), detected_language)
 
         outputs: List[PipelineOutput] = []
+        degradations = list(info.degradations)
 
         if keep_original:
             original_srt = original_output_path or output_dir / f"{stem}.{detected_language}.srt"
@@ -256,6 +260,9 @@ def run_pipeline(
                     )
             else:
                 translated = translator.translate(segments, detected_language, lang)
+            untranslated = translator.untranslated_degradation(lang, len(segments))
+            if untranslated is not None:
+                degradations.append(untranslated)
 
             if bilingual:
                 merged = subtitle_processor.merge_bilingual(
@@ -282,6 +289,7 @@ def run_pipeline(
             language_probability=info.language_probability,
             segment_count=len(segments),
             outputs=outputs,
+            degradations=degradations,
         )
 
     finally:

@@ -6,6 +6,8 @@ from typing import List, Optional, Dict, Any
 from enum import Enum
 from datetime import datetime
 
+from .degradation import Degradation
+
 
 class TaskStatus(Enum):
     """Task status enum."""
@@ -36,6 +38,7 @@ class VideoTask:
     # Output file paths
     original_srt: Optional[Path] = None
     translated_srts: Dict[str, Path] = field(default_factory=dict)
+    degradations: List[Degradation] = field(default_factory=list)
 
     @property
     def elapsed_time(self) -> Optional[float]:

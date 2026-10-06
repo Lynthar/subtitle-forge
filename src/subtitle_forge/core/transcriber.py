@@ -15,6 +15,12 @@ import threading
 from faster_whisper import WhisperModel, BatchedInferencePipeline
 
 from ..models.config import WhisperConfig
+from ..models.degradation import (
+    ALIGNMENT_FAILED,
+    CPU_FALLBACK,
+    WHISPERX_MISSING,
+    Degradation,
+)
 from ..models.subtitle import SubtitleSegment, WordTiming
 from ..utils.gpu import get_optimal_compute_type, get_available_vram
 from ..exceptions import TranscriptionError
@@ -162,10 +168,18 @@ class Transcriber:
         # Determine if WhisperX should be used
         self.use_whisperx = _should_use_whisperx(use_whisperx)
 
+        # Fallbacks fixed at construction, reported with every transcription.
+        self._standing_degradations: List[Degradation] = []
         if use_whisperx and not WHISPERX_AVAILABLE:
             logger.warning(
                 "WhisperX not available. Install with: pip install whisperx. "
                 "Falling back to faster-whisper."
+            )
+            self._standing_degradations.append(
+                Degradation(
+                    WHISPERX_MISSING,
+                    "WhisperX is not installed; timing comes from plain faster-whisper",
+                )
             )
 
         self._model: Optional[WhisperModel] = None
@@ -214,7 +228,7 @@ class Transcriber:
         return cls(**kwargs)
 
     @classmethod
-    def select_optimal_model(cls, prefer_large: bool = True) -> str:
+    def select_optimal_model(cls, prefer_large: bool = True) -> Optional[str]:
         """
         Select optimal model based on available VRAM.
 
@@ -222,13 +236,13 @@ class Transcriber:
             prefer_large: Prefer larger models if VRAM allows.
 
         Returns:
-            Recommended model name.
+            Recommended model name, or None when free VRAM cannot be read.
         """
         available_vram = get_available_vram()
 
         if available_vram <= 0:
-            logger.warning("Cannot detect GPU VRAM, using small model on CPU")
-            return "small"
+            logger.warning("Cannot detect free GPU VRAM, no model recommendation")
+            return None
 
         # Sort models by VRAM requirement
         sorted_models = sorted(
@@ -416,8 +430,11 @@ class Transcriber:
         # instance (see _transcribe_lock).
         with self._transcribe_lock:
             if self.use_whisperx:
-                return self._transcribe_whisperx(audio_path, language=language)
-            return self._transcribe_faster_whisper(audio_path, language=language)
+                segments, info = self._transcribe_whisperx(audio_path, language=language)
+            else:
+                segments, info = self._transcribe_faster_whisper(audio_path, language=language)
+        info.degradations = [*self._standing_degradations, *info.degradations]
+        return segments, info
 
     def _transcribe_whisperx(
         self, audio_path: Path, *, language: Optional[str]
@@ -444,11 +461,15 @@ class Transcriber:
             # type would make the fallback fail anyway.
             device = self.device
             compute_type = self.compute_type
+            degradations: List[Degradation] = []
             if device == "cuda" and not torch.cuda.is_available():
                 device = "cpu"
                 compute_type = get_optimal_compute_type("cpu")
                 logger.warning(
                     f"CUDA not available, using CPU for WhisperX (compute_type={compute_type})"
+                )
+                degradations.append(
+                    Degradation(CPU_FALLBACK, "CUDA is unavailable; WhisperX ran on the CPU")
                 )
 
             # beam_size is a WhisperX ASR option — it lives in asr_options, not as a transcribe()
@@ -524,6 +545,12 @@ class Transcriber:
                     )
                 except Exception as e:
                     logger.warning(f"Forced alignment failed: {e}. Using original timestamps.")
+                    degradations.append(
+                        Degradation(
+                            ALIGNMENT_FAILED,
+                            f"Forced alignment failed ({e}); timestamps are segment-level",
+                        )
+                    )
 
             # Convert to SubtitleSegments
             segments = []
@@ -567,6 +594,7 @@ class Transcriber:
                 if "language_probability" in result
                 else 1.0,
                 duration=audio_duration,
+                degradations=degradations,
             )
 
             logger.info(

@@ -9,31 +9,29 @@ import pytest
 pytest.importorskip("ffmpeg", reason="core.audio imports ffmpeg-python")
 
 from subtitle_forge.core import pipeline as pipeline_module  # noqa: E402
+from subtitle_forge.core.asr import TranscriptionInfo  # noqa: E402
 from subtitle_forge.core.pipeline import (  # noqa: E402
     PipelineHooks,
     PipelineOutput,
+    PipelineResult,
     StructureCheckError,
     run_pipeline,
 )
 from subtitle_forge.core.subtitle import SubtitleProcessor  # noqa: E402
 from subtitle_forge.models.config import AppConfig  # noqa: E402
+from subtitle_forge.models.degradation import Degradation  # noqa: E402
 from subtitle_forge.models.subtitle import SubtitleSegment  # noqa: E402
 from subtitle_forge.server import processing  # noqa: E402
 from subtitle_forge.server.jobs import Job  # noqa: E402
-
-
-class _FakeInfo:
-    def __init__(self, language="en", language_probability=0.98, duration=60.0):
-        self.language = language
-        self.language_probability = language_probability
-        self.duration = duration
 
 
 class _FakeTranscriber:
     """Records what it was asked to do and returns fixed segments (two clean ones by default)."""
 
     def __init__(self, language="en", segments=None, duration=60.0):
-        self.info = _FakeInfo(language=language, duration=duration)
+        self.info = TranscriptionInfo(
+            language=language, language_probability=0.98, duration=duration
+        )
         self.segments = segments
         self.calls = []
         self.raise_on_transcribe = None
@@ -52,9 +50,13 @@ class _FakeTranscriber:
 class _FakeTranslator:
     """Prefixes each line with the target language; records every call."""
 
-    def __init__(self, drop_last=False):
+    def __init__(self, drop_last=False, untranslated=None):
         self.calls = []
         self.drop_last = drop_last
+        self.untranslated = untranslated or {}  # target language -> its Degradation
+
+    def untranslated_degradation(self, target_lang, total):
+        return self.untranslated.get(target_lang)
 
     def translate(self, segments, source_lang, target_lang, progress_callback=None):
         self.calls.append((source_lang, target_lang))
@@ -385,3 +387,46 @@ def test_server_job_lists_the_written_files_when_the_check_fails(tmp_path, monke
         processing._run_job(job, AppConfig(), transcriber=None)
 
     assert job.outputs == [{"language": "en", "path": str(output.path)}]
+
+
+def test_the_result_carries_backend_then_per_language_degradations(tmp_path, video, fake_audio):
+    cpu = Degradation("cpu_fallback", "CUDA is unavailable")
+    ja = Degradation("translation_incomplete", "ja: 1 of 2 segments left in the source language")
+    transcriber = _FakeTranscriber()
+    transcriber.info.degradations = [cpu]
+
+    result = run_pipeline(
+        video,
+        AppConfig(),
+        transcriber=transcriber,
+        translator=_FakeTranslator(untranslated={"ja": ja}),
+        target_languages=["zh", "ja"],
+        output_dir=tmp_path,
+    )
+
+    assert result.degradations == [cpu, ja]
+
+
+def test_a_clean_run_reports_no_degradations(tmp_path, video, fake_audio):
+    result = run_pipeline(
+        video,
+        AppConfig(),
+        transcriber=_FakeTranscriber(),
+        translator=_FakeTranslator(),
+        target_languages=["zh"],
+        output_dir=tmp_path,
+    )
+
+    assert result.degradations == []
+
+
+def test_server_job_records_the_degradations(tmp_path, monkeypatch):
+    cpu = Degradation("cpu_fallback", "CUDA is unavailable")
+    result = PipelineResult("en", 0.9, 1, degradations=[cpu])
+    monkeypatch.setattr(processing, "run_pipeline", lambda *a, **k: result)
+    monkeypatch.setattr(processing.SubtitleTranslator, "from_config", lambda *a, **k: None)
+    job = Job(job_id="j", video_path=str(tmp_path / "clip.mp4"), target_languages=["zh"])
+
+    processing._run_job(job, AppConfig(), transcriber=None)
+
+    assert job.degradations == [cpu]

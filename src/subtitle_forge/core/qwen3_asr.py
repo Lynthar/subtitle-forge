@@ -18,6 +18,12 @@ import numpy as np
 
 from ..exceptions import TranscriptionError
 from ..models.config import Qwen3AsrConfig
+from ..models.degradation import (
+    ALIGNMENT_UNSUPPORTED_LANGUAGE,
+    CPU_FALLBACK,
+    FLASH_ATTENTION_MISSING,
+    Degradation,
+)
 from ..models.subtitle import SubtitleSegment, WordTiming
 from .asr import TranscriptionInfo
 from .hf_hub import download_repos
@@ -257,6 +263,8 @@ class Qwen3AsrBackend:
             os.environ["HF_ENDPOINT"] = hf_endpoint
             logger.info(f"Using HuggingFace mirror: {hf_endpoint}")
         self._model: Any = None
+        # Fallbacks taken by the last load, reported with every transcription.
+        self._load_degradations: List[Degradation] = []
         # Serializes inference and the lazy load when threads share this instance.
         self._lock = threading.Lock()
 
@@ -316,9 +324,13 @@ class Qwen3AsrBackend:
             ) from e
 
         device = self.device
+        degradations: List[Degradation] = []
         if device == "cuda" and not torch.cuda.is_available():
             logger.warning("CUDA not available, running Qwen3-ASR on the CPU")
             device = "cpu"
+            degradations.append(
+                Degradation(CPU_FALLBACK, "CUDA is unavailable; Qwen3-ASR ran on the CPU")
+            )
         kwargs: Dict[str, Any] = {
             "dtype": torch.bfloat16 if device == "cuda" else torch.float32,
             "device_map": "cuda:0" if device == "cuda" else "cpu",
@@ -327,6 +339,12 @@ class Qwen3AsrBackend:
             kwargs["attn_implementation"] = "flash_attention_2"
         else:
             logger.warning(FLASH_ATTENTION_WARNING)
+            degradations.append(
+                Degradation(
+                    FLASH_ATTENTION_MISSING,
+                    "FlashAttention 2 is unavailable; accuracy drops on audio over ~8 s",
+                )
+            )
 
         try:
             # Local snapshot paths: qwen-asr loads its processors without our cache_dir.
@@ -345,6 +363,7 @@ class Qwen3AsrBackend:
             )
         except Exception as e:
             raise TranscriptionError(f"Failed to load Qwen3-ASR: {e}") from e
+        self._load_degradations = degradations
         return self._model
 
     def transcribe(
@@ -374,6 +393,7 @@ class Qwen3AsrBackend:
                 )
             except Exception as e:
                 raise TranscriptionError(f"Qwen3-ASR transcription failed: {e}") from e
+            degradations = list(self._load_degradations)
 
         # Segment chunk by chunk: a chunk's text joins the next one's without a space.
         segments: List[SubtitleSegment] = []
@@ -392,11 +412,20 @@ class Qwen3AsrBackend:
             logger.warning(
                 f"Qwen3-ForcedAligner is not trained on {name}; subtitle timing may be off"
             )
+            degradations.append(
+                Degradation(
+                    ALIGNMENT_UNSUPPORTED_LANGUAGE,
+                    f"Qwen3-ForcedAligner is not trained on {name}; timing may be off",
+                )
+            )
         # "und" (undetermined) when nothing was said: the code still has to be a filename.
         detected = language if language else _LANGUAGE_CODES.get(name, "und")
         logger.info(f"Transcription complete: {len(segments)} segments, language: {detected}")
         info = TranscriptionInfo(
-            language=detected, language_probability=None, duration=len(wav) / SAMPLE_RATE
+            language=detected,
+            language_probability=None,
+            duration=len(wav) / SAMPLE_RATE,
+            degradations=degradations,
         )
         return segments, info
 

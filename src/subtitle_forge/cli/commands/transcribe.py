@@ -1,7 +1,7 @@
 """Transcribe command."""
 
 from pathlib import Path
-from typing import Dict, Optional
+from typing import Dict, List, Optional
 
 import typer
 
@@ -85,7 +85,8 @@ def transcribe_video(
         print_info,
     )
     from ...utils.logger import setup_logging
-    from ..app import get_config, prepare_asr_backend, whisper_flags_apply
+    from ...models.degradation import AUTO_MODEL_FALLBACK, Degradation
+    from ..app import EXIT_DEGRADED, get_config, prepare_asr_backend, whisper_flags_apply
 
     # get_config() (not a bare AppConfig.load()) so the root --config flag
     # actually reaches this command.
@@ -108,12 +109,22 @@ def transcribe_video(
         "--whisperx/--no-whisperx": use_whisperx,
     }
     backend_overrides: Dict[str, object] = {}
+    degradations: List[Degradation] = []
     if model:
         backend_overrides["model_name"] = model
     if whisper_flags_apply(config, whisper_flags):
         if auto_model:
-            backend_overrides["model_name"] = Transcriber.select_optimal_model()
-            print_info(f"Auto-selected model: {backend_overrides['model_name']}")
+            selected = Transcriber.select_optimal_model()
+            if selected is None:
+                selected = "small"
+                degradations.append(
+                    Degradation(
+                        AUTO_MODEL_FALLBACK,
+                        "Free GPU memory could not be read; --auto-model fell back to small",
+                    )
+                )
+            backend_overrides["model_name"] = selected
+            print_info(f"Auto-selected model: {selected}")
         backend_overrides["vad_filter"] = vad_filter
         if use_whisperx is not None:
             backend_overrides["use_whisperx"] = use_whisperx
@@ -164,13 +175,18 @@ def transcribe_video(
 
             transcriber.unload_model()
 
+        degradations += result.degradations
         print_success(
             f"Transcription complete!\n"
             f"  Detected language: {result.describe_language()}\n"
             f"  Segments: {result.segment_count}\n"
-            f"  Output: {result.outputs[0].path}"
+            f"  Output: {result.outputs[0].path}",
+            degradations,
         )
 
     except Exception as e:
         print_error(str(e))
         raise typer.Exit(1)
+
+    if degradations:
+        raise typer.Exit(EXIT_DEGRADED)

@@ -11,6 +11,7 @@ import httpx
 from ollama import Client, ResponseError
 
 from ..models.config import OllamaConfig
+from ..models.degradation import TRANSLATION_INCOMPLETE, Degradation
 from ..models.subtitle import SubtitleSegment
 from ..exceptions import TranslationError
 from .model_manager import OllamaModelManager, DownloadProgress
@@ -899,3 +900,15 @@ FOLLOWING DIALOGUE (for context, DO NOT translate):
     def clear_failed_translations(self) -> None:
         """Clear the failed translations list."""
         self._failed_translations = []
+
+    def untranslated_degradation(self, target_lang: str, total: int) -> Optional[Degradation]:
+        """What the last translate() call left untranslated, or None when nothing.
+
+        Counts segments the model never answered; an identical answer (a name) is a translation."""
+        missing = len(self._failed_translations)
+        if not missing:
+            return None
+        return Degradation(
+            TRANSLATION_INCOMPLETE,
+            f"{target_lang}: {missing} of {total} segments left in the source language",
+        )

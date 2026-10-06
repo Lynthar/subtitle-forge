@@ -1,11 +1,12 @@
 """Progress display utilities using Rich."""
 
 import logging
-from typing import TYPE_CHECKING, Iterable, Iterator, Optional, List, Tuple
+from typing import TYPE_CHECKING, Iterable, Iterator, Optional, List, Sequence, Tuple
 from contextlib import contextmanager
 from datetime import datetime
 
 from rich.console import Console
+from rich.markup import escape
 from rich.progress import (
     Progress,
     TaskID,
@@ -20,6 +21,7 @@ from rich.progress import (
 from rich.panel import Panel
 from rich.table import Table
 
+from ..models.degradation import Degradation
 from ..models.task import VideoTask, TaskStatus
 
 if TYPE_CHECKING:
@@ -371,7 +373,9 @@ def print_task_summary(tasks: List[VideoTask]) -> None:
     table.add_column("Note")
 
     for task in tasks:
-        if task.status == TaskStatus.COMPLETED:
+        if task.status == TaskStatus.COMPLETED and task.degradations:
+            status = "[yellow]Degraded[/yellow]"
+        elif task.status == TaskStatus.COMPLETED:
             status = "[green]Success[/green]"
         elif task.status == TaskStatus.FAILED:
             status = "[red]Failed[/red]"
@@ -394,6 +398,28 @@ def print_task_summary(tasks: List[VideoTask]) -> None:
         )
 
     console.print(table)
+    _print_batch_degradations([t for t in tasks if t.status == TaskStatus.COMPLETED])
+
+
+def _print_batch_degradations(completed: List[VideoTask]) -> None:
+    """List degradations under the summary, once for those every task shares."""
+    shared: List[Degradation] = []
+    if len(completed) > 1:
+        shared = [
+            d for d in completed[0].degradations if all(d in t.degradations for t in completed)
+        ]
+    if shared:
+        console.print("[yellow]Degraded in every task:[/yellow]")
+        console.print(_degradation_lines(shared))
+    for task in completed:
+        own = [d for d in task.degradations if d not in shared]
+        if own:
+            console.print(f"[yellow]Degraded:[/yellow] [cyan]{escape(task.video_path.name)}[/cyan]")
+            console.print(_degradation_lines(own))
+
+
+def _degradation_lines(degradations: Sequence[Degradation]) -> str:
+    return "\n".join(f"  [yellow]![/yellow] {escape(d.message)}" for d in degradations)
 
 
 def print_error(message: str) -> None:
@@ -401,11 +427,15 @@ def print_error(message: str) -> None:
     console.print(Panel(message, title="Error", border_style="red"))
 
 
-def print_success(message: str) -> None:
-    """Print success message."""
+def print_success(message: str, degradations: Sequence[Degradation] = ()) -> None:
+    """Print the completion panel; degradations turn it yellow and are listed under the message."""
     if _quiet:
         return
-    console.print(Panel(message, title="Complete", border_style="green"))
+    if not degradations:
+        console.print(Panel(message, title="Complete", border_style="green"))
+        return
+    body = f"{message}\n\nDegraded:\n{_degradation_lines(degradations)}"
+    console.print(Panel(body, title="Complete (degraded)", border_style="yellow"))
 
 
 def print_info(message: str) -> None:

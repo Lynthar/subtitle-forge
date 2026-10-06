@@ -101,8 +101,6 @@ read at runtime.
 - **It picks the audio track by channel count**, so a file with a 2.0 main track
   and a 5.1 commentary track can end up transcribing the commentary. There's no
   `--audio-track` flag yet.
-- **When forced alignment fails it falls back quietly** — you get segment-level
-  timestamps and a warning in the log, not an error.
 - **The HTTP service keeps its job queue in memory.** Restarting loses the queue,
   and there's no per-job cancel or real progress percentage.
 

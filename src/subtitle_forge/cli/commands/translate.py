@@ -49,7 +49,7 @@ def translate_subtitle(
     from ...core.translator import SubtitleTranslator
     from ...core.subtitle import SubtitleProcessor, validate_language_codes
     from ...utils.progress import SubtitleProgress, print_success, print_error, print_info
-    from ..app import get_config
+    from ..app import EXIT_DEGRADED, get_config
 
     # get_config() (not a bare AppConfig.load()) so the root --config flag
     # actually reaches this command.
@@ -116,6 +116,7 @@ def translate_subtitle(
             )
 
             translated = translator.translate(segments, source_lang, target_lang)
+            untranslated = translator.untranslated_degradation(target_lang, len(segments))
 
             # Save
             if bilingual:
@@ -133,9 +134,13 @@ def translate_subtitle(
             f"  Source: {subtitle.name} ({source_lang})\n"
             f"  Target: {target_lang}\n"
             f"  Segments: {len(translated)}\n"
-            f"  Output: {output}"
+            f"  Output: {output}",
+            [untranslated] if untranslated else [],
         )
 
     except Exception as e:
         print_error(str(e))
         raise typer.Exit(1)
+
+    if untranslated:
+        raise typer.Exit(EXIT_DEGRADED)

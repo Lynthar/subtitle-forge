@@ -38,6 +38,7 @@
    - [支持的语言](#支持的语言)
    - [时间戳后处理](#时间戳后处理)
    - [翻译提示词配置](#翻译提示词配置)
+   - [降级与退出码](#降级与退出码)
 
 ---
 
@@ -265,9 +266,9 @@ subtitle-forge config set asr.backend qwen3_asr
 需要知道的几点：
 
 - **识别覆盖 30 种语言，时间轴对齐只覆盖 11 种**：中、英、粤、法、德、意、日、韩、葡、俄、西。
-  其余语言能识别，但字幕时间可能不准，运行时会提示。
+  其余语言能识别，但字幕时间可能不准，结果里会列为降级（见[降级与退出码](#降级与退出码)）。
 - **建议装 FlashAttention 2**（`flash-attn`，需要 CUDA）。没有它时，超过约 8 秒的片段识别准确度会下降；
-  程序照常运行，但启动时会给出警告。flash-attn 在 Windows 上没有官方安装包，多数 Windows 用户会看到这条警告。
+  程序照常运行，但结果里会列为降级。flash-attn 在 Windows 上没有官方安装包，多数 Windows 用户都会遇到这一条。
 - **不报告语种识别的置信度**，处理结果里只显示语言码。
 - **Whisper 专属的参数不起作用**：`--whisperx`、`--vad-mode`、`--speech-pad`、`--min-silence`、
   `--auto-model`、`--batch-size`、`--whisper-model`。给了会提示「已忽略」。`transcribe --model` 对两个后端都有效。
@@ -767,6 +768,10 @@ subtitle-forge serve --host 0.0.0.0 --port 8765
 输出文件写在**源视频同目录**，命名规则与命令行一致：`<视频名>.<语言>.srt`，
 双语为 `<视频名>.<源语言>-<目标语言>.srt`。服务模式不支持指定输出目录。
 
+任务完成后，`GET /jobs/{id}` 的 `degradations` 列出这次运行的降级，每条是
+`{"code": ..., "message": ...}`，没有降级时为空列表；有降级的任务状态仍是 `completed`。
+code 的含义见[降级与退出码](#降级与退出码)。
+
 ## 作为守护进程运行
 
 **macOS（launchd）**——存为 `~/Library/LaunchAgents/com.subtitle-forge.serve.plist`：
@@ -1104,7 +1109,8 @@ subtitle-forge config set timestamp.linger_ms 200
 
 ## 翻译有些段没翻译
 
-字幕里出现少数几句仍然是原文（未翻译）。
+字幕里出现少数几句仍然是原文（未翻译）。完成面板会以 `translation_incomplete` 报出每个目标语言缺了几段，
+命令以退出码 3 结束（见[降级与退出码](#降级与退出码)）。
 
 ### 第一步：看失败原因
 
@@ -1346,3 +1352,35 @@ subtitle-forge config reset-prompt
 | `{segments}` | 要翻译的字幕（必需） |
 | `{context_before}` | 前文上下文 |
 | `{context_after}` | 后文上下文 |
+
+---
+
+## 降级与退出码
+
+处理跑完了、但没按配置跑足，叫降级：GPU 不可用退到 CPU、强制对齐失败退回段级时间轴、
+有几段没翻出来，都算。降级不会让任务失败，字幕照常写出，但每一处都会在结果里说出来：
+
+- `process`、`transcribe`、`translate` 的完成面板变黄，标题为 `Complete (degraded)`，下方逐条列出；
+- `batch` 汇总表里该视频的状态是 `Degraded`，表下列明细，所有视频共有的那几条只列一次；
+- 服务模式下见 `GET /jobs/{id}` 的 `degradations` 字段。
+
+日志里的 WARNING 照旧保留。`--quiet` 会隐藏完成面板，但退出码不变。
+
+| code | 含义 | 怎么办 |
+|------|------|--------|
+| `whisperx_missing` | 配置要用 WhisperX 但没装，时间轴来自普通 faster-whisper | 装 `[whisperx]` 额外依赖，或用 `--no-whisperx` 明确不用 |
+| `alignment_failed` | 强制对齐失败，时间轴退回段级 | message 里带着原因；常见是该语言没有对齐模型，或模型缓存损坏 |
+| `alignment_unsupported_language` | Qwen3-ForcedAligner 不覆盖识别出的语言 | 改用 Whisper 后端 |
+| `cpu_fallback` | 配置要用 CUDA 但不可用，模型跑在 CPU 上 | 见[GPU 未识别](#gpu-未识别) |
+| `flash_attention_missing` | Qwen3-ASR 没有 FlashAttention 2，长片段准确度下降 | 见 [Qwen3-ASR](#qwen3-asr语音识别可选后端) 一节 |
+| `auto_model_fallback` | `--auto-model` 读不到空闲显存，退到 `small` | 用 `--model` 指定模型 |
+| `translation_incomplete` | 有段落模型始终没给出译文，保留了原文 | 见[翻译有些段没翻译](#翻译有些段没翻译) |
+
+code 是稳定标识，供脚本按类判断；message 是给人看的，措辞可能改。
+
+| 退出码 | 含义 |
+|--------|------|
+| `0` | 成功，没有降级 |
+| `1` | 失败，包括结构检查不通过；`batch` 里任一视频失败也是 1 |
+| `2` | 命令行参数有误；`serve` 没有设置 token |
+| `3` | 成功但有降级；`batch` 是没有视频失败、至少一个降级 |

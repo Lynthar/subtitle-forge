@@ -340,8 +340,9 @@ def check(
         from ...core.transcriber import Transcriber
 
         recommended = Transcriber.select_optimal_model()
-        console.print("\n[bold]Recommendation:[/bold]")
-        console.print(f"  Whisper model: [cyan]{recommended}[/cyan] (based on available VRAM)")
+        if recommended is not None:
+            console.print("\n[bold]Recommendation:[/bold]")
+            console.print(f"  Whisper model: [cyan]{recommended}[/cyan] (based on available VRAM)")
 
     # Summary
     console.print()

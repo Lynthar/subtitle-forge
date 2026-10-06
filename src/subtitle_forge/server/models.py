@@ -38,6 +38,11 @@ class JobOutput(BaseModel):
     path: str
 
 
+class JobDegradation(BaseModel):
+    code: str = Field(..., description="Stable identifier, e.g. alignment_failed")
+    message: str
+
+
 class JobResponse(BaseModel):
     job_id: str
     status: str
@@ -51,6 +56,8 @@ class JobResponse(BaseModel):
     completed_at: Optional[datetime] = None
     error: Optional[str] = None
     outputs: List[JobOutput] = []
+    # Set on completion; non-empty means the job finished worse than configured.
+    degradations: List[JobDegradation] = []
 
 
 class JobAccepted(BaseModel):

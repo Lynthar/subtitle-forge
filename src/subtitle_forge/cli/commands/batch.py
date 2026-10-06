@@ -119,8 +119,9 @@ def batch_process(
         print_error,
         print_info,
         print_task_summary,
+        print_warning,
     )
-    from ..app import get_config
+    from ..app import EXIT_DEGRADED, get_config
 
     # get_config() (not a bare AppConfig.load()) so the root --config flag
     # actually reaches this command.
@@ -254,6 +255,7 @@ def batch_process(
         )
 
         task.source_lang = result.detected_language
+        task.degradations = result.degradations
         for produced in result.outputs:
             if produced.language == result.detected_language:
                 task.original_srt = produced.path
@@ -292,9 +294,13 @@ def batch_process(
 
     completed = sum(1 for t in results if t.status.value == "completed")
     failed = sum(1 for t in results if t.status.value == "failed")
+    degraded = sum(1 for t in results if t.degradations)
 
     if failed > 0:
         print_error(f"{failed} task(s) failed")
         raise typer.Exit(1)
+    elif degraded > 0:
+        print_warning(f"{degraded} of {completed} task(s) completed with degradations")
+        raise typer.Exit(EXIT_DEGRADED)
     else:
         print_success(f"All {completed} task(s) completed successfully")

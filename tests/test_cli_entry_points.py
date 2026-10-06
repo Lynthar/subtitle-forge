@@ -15,18 +15,20 @@ from subtitle_forge.cli.app import app  # noqa: E402
 from subtitle_forge.core import asr as asr_module  # noqa: E402
 from subtitle_forge.core import pipeline as pipeline_module  # noqa: E402
 from subtitle_forge.core import translator as translator_module  # noqa: E402
+from subtitle_forge.core.asr import TranscriptionInfo  # noqa: E402
+from subtitle_forge.core.transcriber import Transcriber  # noqa: E402
+from subtitle_forge.models.degradation import Degradation  # noqa: E402
 from subtitle_forge.models.subtitle import SubtitleSegment  # noqa: E402
 
 runner = CliRunner()
 
 # What the fake transcriber was asked to do, reset per test.
 transcribe_calls = []
+# What the fakes report as degraded, reset per test.
+backend_degradations = []
+untranslated = {}  # target language -> its Degradation
 
-
-class _FakeInfo:
-    language = "en"
-    language_probability = 0.99
-    duration = 60.0
+CPU = Degradation("cpu_fallback", "CUDA is unavailable; ran on the CPU")
 
 
 class _FakeTranscriber:
@@ -39,7 +41,7 @@ class _FakeTranscriber:
     def transcribe(self, audio_path, **kwargs):
         transcribe_calls.append(kwargs)
         segments = [SubtitleSegment(index=1, start=0.0, end=1.5, text="Hello there")]
-        return segments, _FakeInfo()
+        return segments, TranscriptionInfo("en", 0.99, 60.0, list(backend_degradations))
 
 
 class _FakeTranslator:
@@ -61,6 +63,9 @@ class _FakeTranslator:
     def effective_batch_size(self):
         return 10
 
+    def untranslated_degradation(self, target_lang, total):
+        return untranslated.get(target_lang)
+
     def translate(self, segments, source_lang, target_lang, progress_callback=None):
         return [
             SubtitleSegment(
@@ -79,6 +84,8 @@ class _FakeExtractor:
 
 def _fake_components(monkeypatch):
     transcribe_calls.clear()
+    backend_degradations.clear()
+    untranslated.clear()
     monkeypatch.setattr(asr_module, "create_backend", lambda config, **o: _FakeTranscriber())
     monkeypatch.setattr(translator_module, "SubtitleTranslator", _FakeTranslator)
     monkeypatch.setattr(pipeline_module, "AudioExtractor", _FakeExtractor)
@@ -274,3 +281,68 @@ def test_whisper_only_flags_are_reported_and_dropped_under_another_backend(tmp_p
     assert result.exit_code == 0, result.output
     assert "Whisper-only" in result.output
     assert built == [{"model_name": "Qwen/Qwen3-ASR-0.6B"}]
+
+
+def test_a_degraded_transcription_says_so_and_exits_3(tmp_path, monkeypatch):
+    _fake_components(monkeypatch)
+    backend_degradations.append(CPU)
+    video = _video(tmp_path)
+
+    result = _run(tmp_path, "transcribe", str(video))
+
+    assert result.exit_code == 3, result.output
+    assert "ran on the CPU" in result.output
+    assert "Hello there" in (tmp_path / "clip.en.srt").read_text(encoding="utf-8")
+
+
+def test_auto_model_without_readable_vram_falls_back_to_small_and_says_so(tmp_path, monkeypatch):
+    _fake_components(monkeypatch)
+    built = []
+    monkeypatch.setattr(
+        asr_module, "create_backend", lambda config, **o: built.append(o) or _FakeTranscriber()
+    )
+    monkeypatch.setattr(Transcriber, "select_optimal_model", classmethod(lambda cls: None))
+
+    result = _run(tmp_path, "transcribe", str(_video(tmp_path)), "--auto-model")
+
+    assert result.exit_code == 3, result.output
+    assert built[0]["model_name"] == "small"
+    assert "fell back to small" in result.output
+
+
+def test_process_reports_an_incomplete_translation_and_exits_3(tmp_path, monkeypatch):
+    _fake_components(monkeypatch)
+    untranslated["zh"] = Degradation("translation_incomplete", "zh: 1 of 1 segments untranslated")
+
+    result = _run(tmp_path, "process", str(_video(tmp_path)), "-t", "zh")
+
+    assert result.exit_code == 3, result.output
+    assert "zh: 1 of 1 segments untranslated" in result.output
+
+
+def test_translate_reports_an_incomplete_translation_and_exits_3(tmp_path, monkeypatch):
+    _fake_components(monkeypatch)
+    untranslated["zh"] = Degradation("translation_incomplete", "zh: 1 of 1 segments untranslated")
+    srt = tmp_path / "clip.en.srt"
+    srt.write_text("1\n00:00:00,000 --> 00:00:01,500\nHello there\n", encoding="utf-8")
+
+    result = _run(tmp_path, "translate", str(srt), "-t", "zh")
+
+    assert result.exit_code == 3, result.output
+    assert "zh: 1 of 1 segments untranslated" in result.output
+
+
+def test_batch_lists_a_degradation_every_task_shares_once_and_exits_3(tmp_path, monkeypatch):
+    _fake_components(monkeypatch)
+    backend_degradations.append(CPU)
+    videos = tmp_path / "videos"
+    videos.mkdir()
+    _video(videos, "a.mp4")
+    _video(videos, "b.mp4")
+
+    result = _run(tmp_path, "batch", str(videos), "-t", "zh")
+
+    assert result.exit_code == 3, result.output
+    assert "Degraded in every task" in result.output
+    assert result.output.count("ran on the CPU") == 1
+    assert "2 of 2 task(s) completed with degradations" in result.output

@@ -98,6 +98,7 @@ def _run_job(job: Job, config: AppConfig, transcriber: AsrBackend) -> list:
     # Surface the detected language back through the job record so callers
     # polling /jobs/{id} see it once transcription completes.
     job.source_language = result.detected_language
+    job.degradations = result.degradations
 
     return _describe(result.outputs)
 

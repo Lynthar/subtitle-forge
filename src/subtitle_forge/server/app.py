@@ -16,7 +16,14 @@ from .jobs import (
     new_job_id,
     validate_video_path,
 )
-from .models import HealthResponse, JobAccepted, JobOutput, JobRequest, JobResponse
+from .models import (
+    HealthResponse,
+    JobAccepted,
+    JobDegradation,
+    JobOutput,
+    JobRequest,
+    JobResponse,
+)
 from .processing import TranscriberHolder, make_processor
 
 logger = logging.getLogger(__name__)
@@ -132,6 +139,7 @@ def create_app(
             completed_at=job.completed_at,
             error=job.error,
             outputs=[JobOutput(language=o["language"], path=o["path"]) for o in job.outputs],
+            degradations=[JobDegradation(code=d.code, message=d.message) for d in job.degradations],
         )
 
     return app

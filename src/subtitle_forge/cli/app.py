@@ -19,6 +19,9 @@ app = typer.Typer(
 
 console = Console()
 
+# Exit code of a run that finished with degradations; 1 is failure and 2 click's usage error.
+EXIT_DEGRADED = 3
+
 # transcribe/translate/batch/serve expose a single action each, so they register as plain root
 # commands. **Never attach them with add_typer()** — that makes a Click *group*, which never
 # auto-invokes its lone command, so `subtitle-forge transcribe <video>` fails with No such command.
@@ -464,7 +467,8 @@ def process(
             f"  Video: {video.name}\n"
             f"  Detected language: {result.describe_language()}\n"
             f"  Segments: {result.segment_count}\n"
-            f"  Output directory: {output_dir}"
+            f"  Output directory: {output_dir}",
+            result.degradations,
         )
 
     except typer.Exit:
@@ -474,6 +478,9 @@ def process(
     except Exception as e:
         print_error(str(e))
         raise typer.Exit(1)
+
+    if result.degradations:
+        raise typer.Exit(EXIT_DEGRADED)
 
 
 @app.command()

@@ -169,11 +169,13 @@ def test_a_language_the_aligner_does_not_cover_is_warned_about(monkeypatch, wav,
 
     assert info.language == "th"
     assert "not trained on Thai" in caplog.text
+    assert [d.code for d in info.degradations] == ["alignment_unsupported_language"]
 
 
-def _fake_runtime(monkeypatch, *, cuda: bool, flash_attn: bool):
+def _fake_runtime(monkeypatch, *, cuda: bool, flash_attn: bool, model=None):
     """Stand-ins for torch, qwen_asr and the HF download; returns the from_pretrained calls."""
     calls = []
+    model = model or object()
     torch = types.SimpleNamespace(
         bfloat16="bf16",
         float32="fp32",
@@ -181,7 +183,7 @@ def _fake_runtime(monkeypatch, *, cuda: bool, flash_attn: bool):
     )
     qwen_asr = types.SimpleNamespace(
         Qwen3ASRModel=types.SimpleNamespace(
-            from_pretrained=lambda path, **kwargs: calls.append((path, kwargs)) or object()
+            from_pretrained=lambda path, **kwargs: calls.append((path, kwargs)) or model
         )
     )
     hub = types.SimpleNamespace(snapshot_download=lambda repo, **kwargs: f"/cache/{repo}")
@@ -258,3 +260,16 @@ def test_a_segment_over_the_cap_is_cut_after_its_last_clause_mark():
         (" more", 6.6, 7.5),  # pushes the segment past 7 s
     )
     assert [s.text for s in segments_from_words(words)] == ["He waited,", "and waited more"]
+
+
+def test_load_fallbacks_are_reported_with_every_transcription(monkeypatch, wav):
+    results = [_Result("English", "Hi.", _Alignment([_Item("Hi", 0.1, 0.4)]))]
+    _fake_runtime(monkeypatch, cuda=False, flash_attn=False, model=_FakeModel(results))
+    monkeypatch.setattr(qwen3_asr, "_split_into_chunks", lambda samples: [(samples, 0.0)])
+    backend = Qwen3AsrBackend.from_config(AppConfig().qwen3_asr)
+
+    first = backend.transcribe(wav)[1].degradations
+    second = backend.transcribe(wav)[1].degradations
+
+    assert [d.code for d in first] == ["cpu_fallback", "flash_attention_missing"]
+    assert second == first

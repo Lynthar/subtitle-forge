@@ -112,3 +112,22 @@ def test_unhealed_segment_keeps_its_failure_record():
     out = translator.translate_batch(_segs("Hello", "Bye"), "en", "zh")
     assert [s.text for s in out] == ["你好", "Bye"]
     assert [f["index"] for f in translator.get_failed_translations()] == [2]
+
+
+def test_a_segment_the_model_never_answered_is_reported_as_untranslated():
+    translator, _ = _translator([_good({"1": "你好"}), "Bye"])
+    translator.translate(_segs("Hello", "Bye"), "en", "zh")
+
+    degradation = translator.untranslated_degradation("zh", 2)
+
+    assert degradation is not None
+    assert degradation.code == "translation_incomplete"
+    assert degradation.message.startswith("zh: 1 of 2")
+
+
+def test_an_answer_identical_to_the_source_is_not_reported():
+    # A name translates to itself; the individual retry agrees, so nothing is missing.
+    translator, _ = _translator([_good({"1": "你好", "2": "Tokyo"}), "Tokyo"])
+    translator.translate(_segs("Hello", "Tokyo"), "en", "zh")
+
+    assert translator.untranslated_degradation("zh", 2) is None
