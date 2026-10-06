@@ -314,9 +314,9 @@ def check(
     # Check Whisper model
     console.print("\n[bold]Whisper Status:[/bold]")
     try:
-        from ...core.transcriber import Transcriber
+        from ...core.asr import create_backend
 
-        transcriber = Transcriber.from_config(config.whisper)
+        transcriber = create_backend(config)
         if transcriber.is_model_cached():
             console.print(f"  [green]Model:[/green] {config.whisper.model} (ready)")
         else:

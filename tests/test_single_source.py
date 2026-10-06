@@ -13,7 +13,7 @@ SRC = Path(__file__).resolve().parent.parent / "src" / "subtitle_forge"
 
 def test_download_progress_bar_lives_only_in_utils_progress():
     # Six copies of this Rich block drifted (--quiet ignored, stalled status text) before
-    # they were folded into download_whisper_with_progress / pull_ollama_with_progress.
+    # they were folded into download_asr_model_with_progress / pull_ollama_with_progress.
     hits = set()
     for path in SRC.rglob("*.py"):
         text = path.read_text(encoding="utf-8")

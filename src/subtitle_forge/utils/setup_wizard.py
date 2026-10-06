@@ -11,7 +11,7 @@ from rich.console import Console
 from rich.panel import Panel
 
 from .progress import (
-    download_whisper_with_progress,
+    download_asr_model_with_progress,
     pull_ollama_with_progress,
 )
 from ..models.config import AppConfig
@@ -35,7 +35,7 @@ def download_whisper_model(whisper_cfg) -> bool:
     """Download Whisper model with progress display."""
     transcriber = _build_transcriber(whisper_cfg)
     try:
-        download_whisper_with_progress(transcriber)
+        download_asr_model_with_progress(transcriber)
         return True
     except KeyboardInterrupt:
         console.print(

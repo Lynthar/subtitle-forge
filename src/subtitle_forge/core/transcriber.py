@@ -9,16 +9,16 @@ os.environ.setdefault("TORCH_FORCE_NO_WEIGHTS_ONLY_LOAD", "1")
 
 from pathlib import Path
 from typing import Any, Dict, Optional, List, Tuple, Callable
-from dataclasses import dataclass
 import logging
 import threading
 
 from faster_whisper import WhisperModel, BatchedInferencePipeline
 
-from ..models.config import TimestampConfig, WhisperConfig
+from ..models.config import WhisperConfig
 from ..models.subtitle import SubtitleSegment, WordTiming
 from ..utils.gpu import get_optimal_compute_type, get_available_vram
 from ..exceptions import TranscriptionError
+from .asr import TranscriptionInfo
 
 logger = logging.getLogger(__name__)
 
@@ -89,17 +89,8 @@ WHISPER_MODEL_SIZES = {
 }
 
 
-@dataclass
-class TranscriptionInfo:
-    """Transcription metadata."""
-
-    language: str
-    language_probability: float
-    duration: float
-
-
 class Transcriber:
-    """Speech-to-text processor using faster-whisper."""
+    """The Whisper ASR backend: faster-whisper, or WhisperX with forced alignment."""
 
     # VRAM in MB. Ties are broken by insertion order (stable sort in
     # select_optimal_model), so large-v3 must precede large-v2 — reversed,
@@ -127,6 +118,10 @@ class Transcriber:
         download_root: Optional[str] = None,
         hf_token: Optional[str] = None,
         hf_endpoint: Optional[str] = None,
+        beam_size: int = WhisperConfig.beam_size,
+        vad_filter: bool = WhisperConfig.vad_filter,
+        batch_size: Optional[int] = WhisperConfig.batch_size,
+        vad_parameters: Optional[dict] = None,
     ):
         """
         Initialize transcriber. Build through from_config(): the defaults live in WhisperConfig.
@@ -141,8 +136,16 @@ class Transcriber:
             hf_token: HuggingFace token, passed to model downloads (needed
                 only for gated/private repos).
             hf_endpoint: HuggingFace mirror endpoint (e.g., "https://hf-mirror.com").
+            beam_size: Beam search size.
+            vad_filter: Enable faster-whisper's VAD filter.
+            batch_size: >1 runs faster-whisper's BatchedInferencePipeline; WhisperX defaults to 8.
+            vad_parameters: silero VAD tuning; None uses DEFAULT_VAD_PARAMETERS.
         """
         self.model_name = model_name
+        self.beam_size = beam_size
+        self.vad_filter = vad_filter
+        self.batch_size = batch_size
+        self.vad_parameters = vad_parameters
         self.device = device
         self.compute_type = compute_type or get_optimal_compute_type(device)
         self.download_root = download_root
@@ -201,6 +204,10 @@ class Transcriber:
             "whisperx_align": cfg.whisperx_align,
             "hf_token": cfg.hf_token,
             "hf_endpoint": cfg.hf_endpoint,
+            "beam_size": cfg.beam_size,
+            "vad_filter": cfg.vad_filter,
+            "batch_size": cfg.batch_size,
+            "vad_parameters": build_vad_parameters(cfg),
         }
         kwargs.update(overrides)
         return cls(**kwargs)
@@ -446,33 +453,12 @@ class Transcriber:
         return params
 
     def transcribe(
-        self,
-        audio_path: Path,
-        language: Optional[str] = None,
-        beam_size: int = 5,
-        vad_filter: bool = True,
-        word_timestamps: bool = True,
-        batch_size: Optional[int] = None,
-        vad_parameters: Optional[dict] = None,
-        post_process: bool = True,
-        timestamp_config: Optional[TimestampConfig] = None,
+        self, audio_path: Path, *, language: Optional[str] = None
     ) -> Tuple[List[SubtitleSegment], TranscriptionInfo]:
-        """
-        Transcribe audio file.
+        """Transcribe audio; the AsrBackend contract in core.asr says what comes back.
 
-        Args:
-            audio_path: Path to audio file.
-            language: Source language code. Auto-detect if None.
-            beam_size: Beam search size.
-            vad_filter: Enable VAD filtering.
-            word_timestamps: Generate word-level timestamps for better timing.
-            batch_size: Batch size for BatchedInferencePipeline.
-            vad_parameters: Custom VAD parameters. Uses optimized defaults if None.
-            post_process: Enable timestamp post-processing.
-            timestamp_config: Timestamp post-processing settings; None = TimestampConfig().
-
-        Returns:
-            Tuple of (subtitle segments, transcription info).
+        Raises:
+            TranscriptionError: The audio file is missing or recognition failed.
         """
         audio_path = Path(audio_path)
         if not audio_path.exists():
@@ -483,41 +469,12 @@ class Transcriber:
         # Serialize inference + lazy model loads across threads sharing this
         # instance (see _transcribe_lock).
         with self._transcribe_lock:
-            # Use WhisperX if available and enabled
             if self.use_whisperx:
-                return self._transcribe_whisperx(
-                    audio_path=audio_path,
-                    language=language,
-                    beam_size=beam_size,
-                    batch_size=batch_size,
-                    vad_parameters=vad_parameters,
-                    post_process=post_process,
-                    timestamp_config=timestamp_config,
-                )
-
-            # Fall back to faster-whisper
-            return self._transcribe_faster_whisper(
-                audio_path=audio_path,
-                language=language,
-                beam_size=beam_size,
-                vad_filter=vad_filter,
-                word_timestamps=word_timestamps,
-                batch_size=batch_size,
-                vad_parameters=vad_parameters,
-                post_process=post_process,
-                timestamp_config=timestamp_config,
-            )
+                return self._transcribe_whisperx(audio_path, language=language)
+            return self._transcribe_faster_whisper(audio_path, language=language)
 
     def _transcribe_whisperx(
-        self,
-        audio_path: Path,
-        *,
-        language: Optional[str],
-        beam_size: int,
-        batch_size: Optional[int],
-        vad_parameters: Optional[dict],
-        post_process: bool,
-        timestamp_config: Optional[TimestampConfig],
+        self, audio_path: Path, *, language: Optional[str]
     ) -> Tuple[List[SubtitleSegment], TranscriptionInfo]:
         """Transcribe using WhisperX with forced alignment."""
         import torch
@@ -527,7 +484,7 @@ class Transcriber:
         # WhisperX uses pyannote-based VAD (vad_onset/vad_offset), so the
         # silero-style speech_pad_ms / min_silence_duration_ms tuning does not
         # translate. Warn once instead of silently discarding it.
-        if vad_parameters and not self._whisperx_vad_warned:
+        if self.vad_parameters and not self._whisperx_vad_warned:
             logger.warning(
                 "VAD tuning (speech_pad_ms / min_silence_duration_ms) is ignored "
                 "under WhisperX, which uses pyannote VAD. Run with --no-whisperx "
@@ -561,7 +518,7 @@ class Transcriber:
                 try:
                     self._whisperx_model = whisperx.load_model(
                         self.model_name,
-                        asr_options={"beam_size": beam_size},
+                        asr_options={"beam_size": self.beam_size},
                         **load_kwargs,
                     )
                 except TypeError:
@@ -576,7 +533,7 @@ class Transcriber:
             # cuts less.
             transcribe_kwargs: dict = {
                 "language": language,
-                "batch_size": batch_size if batch_size else 8,
+                "batch_size": self.batch_size if self.batch_size else 8,
                 "chunk_size": 20,
             }
 
@@ -666,16 +623,6 @@ class Transcriber:
                 duration=audio_duration,
             )
 
-            # Apply post-processing
-            if post_process:
-                segments = self._apply_post_processing(
-                    segments,
-                    audio_duration,
-                    timestamp_config,
-                    audio_path,
-                    language=detected_language,
-                )
-
             logger.info(
                 f"WhisperX transcription complete: {len(segments)} segments, "
                 f"language: {transcription_info.language}"
@@ -688,17 +635,7 @@ class Transcriber:
             raise TranscriptionError(f"WhisperX transcription failed: {e}") from e
 
     def _transcribe_faster_whisper(
-        self,
-        audio_path: Path,
-        *,
-        language: Optional[str],
-        beam_size: int,
-        vad_filter: bool,
-        word_timestamps: bool,
-        batch_size: Optional[int],
-        vad_parameters: Optional[dict],
-        post_process: bool,
-        timestamp_config: Optional[TimestampConfig],
+        self, audio_path: Path, *, language: Optional[str]
     ) -> Tuple[List[SubtitleSegment], TranscriptionInfo]:
         """Transcribe using faster-whisper."""
         model = self.load_model()
@@ -706,7 +643,10 @@ class Transcriber:
         logger.debug("Using faster-whisper for transcription")
 
         # Use optimized VAD parameters for better subtitle timing
-        vad_params = vad_parameters if vad_parameters is not None else self.DEFAULT_VAD_PARAMETERS
+        vad_params = (
+            self.vad_parameters if self.vad_parameters is not None else self.DEFAULT_VAD_PARAMETERS
+        )
+        beam_size, vad_filter, batch_size = self.beam_size, self.vad_filter, self.batch_size
 
         try:
             # Select inference method
@@ -720,7 +660,7 @@ class Transcriber:
                     beam_size=beam_size,
                     batch_size=batch_size,
                     vad_filter=vad_filter,
-                    word_timestamps=word_timestamps,
+                    word_timestamps=True,
                     vad_parameters=vad_params if vad_filter else None,
                 )
             else:
@@ -729,7 +669,7 @@ class Transcriber:
                     language=language,
                     beam_size=beam_size,
                     vad_filter=vad_filter,
-                    word_timestamps=word_timestamps,
+                    word_timestamps=True,
                     vad_parameters=vad_params if vad_filter else None,
                 )
 
@@ -738,7 +678,7 @@ class Transcriber:
             for segment in segments_iter:
                 # Extract word-level timestamps if available
                 words = None
-                if word_timestamps and hasattr(segment, "words") and segment.words:
+                if hasattr(segment, "words") and segment.words:
                     words = [
                         WordTiming(
                             word=w.word,
@@ -775,40 +715,15 @@ class Transcriber:
                 duration=audio_duration,
             )
 
-            # Apply post-processing
-            if post_process:
-                segments = self._apply_post_processing(
-                    segments,
-                    audio_duration,
-                    timestamp_config,
-                    audio_path,
-                    language=info.language,
-                )
-
             logger.info(
                 f"Transcription complete: {len(segments)} segments, "
-                f"language: {transcription_info.language} "
-                f"(confidence: {transcription_info.language_probability:.2%})"
+                f"language: {info.language} (confidence: {info.language_probability:.2%})"
             )
 
             return segments, transcription_info
 
         except Exception as e:
             raise TranscriptionError(f"Transcription failed: {e}") from e
-
-    def _apply_post_processing(
-        self,
-        segments: List[SubtitleSegment],
-        audio_duration: float,
-        timestamp_config: Optional[TimestampConfig] = None,
-        audio_path: Optional[Path] = None,
-        language: Optional[str] = None,
-    ) -> List[SubtitleSegment]:
-        """Apply timestamp post-processing."""
-        from .timestamp_processor import TimestampProcessor
-
-        processor = TimestampProcessor(timestamp_config or TimestampConfig(), language=language)
-        return processor.process(segments, audio_duration)
 
     def unload_model(self) -> None:
         """Unload model to free VRAM."""
@@ -830,3 +745,31 @@ class Transcriber:
                 torch.cuda.empty_cache()
         except ImportError:
             pass
+
+
+def build_vad_parameters(
+    cfg: WhisperConfig,
+    *,
+    mode: Optional[str] = None,
+    speech_pad_ms: Optional[int] = None,
+    min_silence_duration_ms: Optional[int] = None,
+) -> dict:
+    """Build the silero VAD parameters for a Transcriber.
+
+    Precedence, highest first: the explicit arguments, the `mode` preset (a VAD_PRESETS
+    key), then cfg.speech_pad_ms / cfg.min_silence_duration_ms. A preset ignores cfg.
+    """
+    if mode is not None:
+        return Transcriber.get_vad_parameters(
+            mode=mode,
+            speech_pad_ms=speech_pad_ms,
+            min_silence_duration_ms=min_silence_duration_ms,
+        )
+    return Transcriber.get_vad_parameters(
+        speech_pad_ms=speech_pad_ms if speech_pad_ms is not None else cfg.speech_pad_ms,
+        min_silence_duration_ms=(
+            min_silence_duration_ms
+            if min_silence_duration_ms is not None
+            else cfg.min_silence_duration_ms
+        ),
+    )

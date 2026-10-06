@@ -106,8 +106,8 @@ def batch_process(
         subtitle-forge batch ./videos/ -t zh -t ja --workers 2 --recursive
         subtitle-forge batch --file-list videos.txt -t zh
     """
-    from ...core.pipeline import build_timestamp_config, build_vad_parameters, run_pipeline
-    from ...core.transcriber import Transcriber
+    from ...core.asr import create_backend
+    from ...core.pipeline import build_timestamp_config, run_pipeline
     from ...core.translator import SubtitleTranslator
     from ...core.subtitle import normalize_target_languages
     from ...core.queue import run_batch_sync
@@ -217,10 +217,9 @@ def batch_process(
         for video in videos
     ]
 
-    # One Transcriber shared across workers — its model load is heavy, and a
+    # One backend shared across workers — its model load is heavy, and a
     # lock inside serializes the actual inference.
-    transcriber = Transcriber.from_config(config.whisper)
-    vad_params = build_vad_parameters(config)
+    transcriber = create_backend(config)
 
     def process_task(task: VideoTask) -> None:
         """Process a single video task."""
@@ -252,7 +251,6 @@ def batch_process(
             bilingual=bilingual,
             timestamp_mode=timestamp_mode,
             split_sentences=split_sentences,
-            vad_parameters=vad_params,
         )
 
         task.source_lang = result.detected_language

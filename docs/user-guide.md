@@ -424,6 +424,9 @@ subtitle-forge config check --verbose
 ### 配置示例
 
 ```yaml
+asr:
+  backend: whisper               # 语音识别后端，设置写在同名的一节里；目前只有 whisper
+
 whisper:
   model: large-v3                # Whisper 模型
   device: cuda                   # cuda 或 cpu

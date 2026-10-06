@@ -9,6 +9,16 @@ from typing import Optional, Tuple
 
 import yaml
 
+# Backends core.asr.create_backend can build; each one reads the config section of the same name.
+ASR_BACKENDS = ("whisper",)
+
+
+@dataclass
+class AsrConfig:
+    """Speech recognition backend selection."""
+
+    backend: str = "whisper"  # One of ASR_BACKENDS
+
 
 @dataclass
 class TimestampConfig:
@@ -95,6 +105,7 @@ class OutputConfig:
 class AppConfig:
     """Application configuration."""
 
+    asr: AsrConfig = field(default_factory=AsrConfig)
     whisper: WhisperConfig = field(default_factory=WhisperConfig)
     ollama: OllamaConfig = field(default_factory=OllamaConfig)
     output: OutputConfig = field(default_factory=OutputConfig)
@@ -153,6 +164,10 @@ class AppConfig:
         ts, wh, ol = self.timestamp, self.whisper, self.ollama
         errors = []
 
+        if self.asr.backend not in ASR_BACKENDS:
+            errors.append(
+                f"asr.backend must be one of {'/'.join(ASR_BACKENDS)}, got {self.asr.backend!r}"
+            )
         if ts.mode not in ("off", "minimal", "full"):
             errors.append(f"timestamp.mode must be one of off/minimal/full, got {ts.mode!r}")
         if wh.device not in ("cuda", "cpu", "auto"):

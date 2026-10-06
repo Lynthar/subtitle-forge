@@ -221,7 +221,8 @@ def process(
         subtitle-forge process video.mp4 --target-lang zh
         subtitle-forge process video.mp4 -t zh -t ja --bilingual
     """
-    from ..core.transcriber import Transcriber
+    from ..core.asr import create_backend
+    from ..core.transcriber import Transcriber, build_vad_parameters
     from ..core.translator import SubtitleTranslator
     from ..utils.progress import (
         SubtitleProgress,
@@ -231,7 +232,7 @@ def process(
         print_info,
         print_warning,
         print_translation_explainer,
-        download_whisper_with_progress,
+        download_asr_model_with_progress,
         pull_ollama_with_progress,
     )
 
@@ -276,10 +277,8 @@ def process(
     # Build VAD parameters with the full precedence: CLI flag > --vad-mode preset > config.
     # Going through build_vad_parameters (not the bare Transcriber.get_vad_parameters, which
     # ignores config) is what makes configured VAD tuning take effect on the CLI too.
-    from ..core.pipeline import build_vad_parameters
-
     vad_params = build_vad_parameters(
-        cfg,
+        cfg.whisper,
         mode=vad_mode,
         speech_pad_ms=speech_pad,
         min_silence_duration_ms=min_silence,
@@ -295,14 +294,15 @@ def process(
         # Determine HuggingFace endpoint (CLI option takes precedence)
         hf_endpoint = hf_mirror or cfg.whisper.hf_endpoint
 
-        transcriber = Transcriber.from_config(
-            cfg.whisper,
+        transcriber = create_backend(
+            cfg,
             use_whisperx=whisperx_enabled,
             hf_endpoint=hf_endpoint,
+            vad_parameters=vad_params,
         )
 
         # Log which backend will be used
-        if transcriber.use_whisperx:
+        if isinstance(transcriber, Transcriber) and transcriber.use_whisperx:
             print_info("Using WhisperX for improved timestamp accuracy")
 
         # Check and download Whisper model if needed (separate progress bar)
@@ -310,7 +310,7 @@ def process(
             model_size_mb = transcriber.get_model_size() / (1024 * 1024)
             console.print(f"\n[cyan]Downloading Whisper model: {cfg.whisper.model}[/cyan]")
             console.print(f"[dim]Model size: ~{model_size_mb:.0f}MB (one-time download)[/dim]\n")
-            download_whisper_with_progress(transcriber)
+            download_asr_model_with_progress(transcriber)
             print_info("Whisper model downloaded successfully!\n")
 
         # Initialize translator
@@ -421,7 +421,6 @@ def process(
                 timestamp_mode=timestamp_mode,
                 split_sentences=split_sentences,
                 post_process=post_process,
-                vad_parameters=vad_params,
                 hooks=PipelineHooks(
                     on_audio_extracted=hook_audio_extracted,
                     on_transcribe_complete=hook_transcribe_complete,
@@ -445,7 +444,7 @@ def process(
         print_success(
             f"Processing complete!\n"
             f"  Video: {video.name}\n"
-            f"  Detected language: {result.detected_language} ({result.language_probability:.1%})\n"
+            f"  Detected language: {result.describe_language()}\n"
             f"  Segments: {result.segment_count}\n"
             f"  Output directory: {output_dir}"
         )

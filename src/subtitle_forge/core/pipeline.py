@@ -6,10 +6,10 @@ without the pipeline knowing or caring about UI; the server passes no hooks
 and gets a quiet, side-effect-free run.
 
 Caller responsibilities:
-- Build the Transcriber and ensure its Whisper model is cached locally.
+- Build the ASR backend with core.asr.create_backend and ensure its model is cached locally.
 - Build the SubtitleTranslator and ensure its Ollama model is available,
   unless target_languages is empty (transcribe-only runs pass none).
-- Clean up Transcriber state if needed (e.g. unload_model()).
+- Unload the backend's model when done, if needed (unload_model()).
 
 The pipeline cleans up its own audio scratch file in a finally block.
 """
@@ -22,6 +22,7 @@ from typing import Callable, ContextManager, Dict, List, Optional
 from ..exceptions import SubtitleError
 from ..models.config import AppConfig, TimestampConfig
 from ..models.subtitle import SubtitleSegment
+from .asr import AsrBackend
 from .audio import AudioExtractor
 from .subtitle import (
     SubtitleProcessor,
@@ -30,7 +31,7 @@ from .subtitle import (
     normalize_target_languages,
     validate_language_codes,
 )
-from .transcriber import Transcriber
+from .timestamp_processor import TimestampProcessor
 from .translator import SubtitleTranslator
 
 logger = logging.getLogger(__name__)
@@ -49,9 +50,15 @@ class PipelineResult:
     """End state of a pipeline run."""
 
     detected_language: str
-    language_probability: float
+    language_probability: Optional[float]
     segment_count: int
     outputs: List[PipelineOutput] = field(default_factory=list)
+
+    def describe_language(self) -> str:
+        """The detected language, with the backend's confidence when it reports one."""
+        if self.language_probability is None:
+            return self.detected_language
+        return f"{self.detected_language} ({self.language_probability:.1%})"
 
 
 class StructureCheckError(SubtitleError):
@@ -104,7 +111,7 @@ def build_timestamp_config(
     mode_override: Optional[str] = None,
     split_sentences_override: Optional[bool] = None,
 ) -> Optional[TimestampConfig]:
-    """The timestamp settings for Transcriber.transcribe(), with the CLI overrides applied.
+    """The timestamp post-processing settings, with the CLI overrides applied.
 
     Returns None when post-processing is disabled at the config level —
     callers should treat None as "skip the timestamp processor entirely".
@@ -127,41 +134,11 @@ def build_timestamp_config(
     return ts
 
 
-def build_vad_parameters(
-    config: AppConfig,
-    *,
-    mode: Optional[str] = None,
-    speech_pad_ms: Optional[int] = None,
-    min_silence_duration_ms: Optional[int] = None,
-) -> dict:
-    """Build the VAD parameters dict for Transcriber.transcribe().
-
-    Three layers of precedence (highest first):
-    1. Explicit `speech_pad_ms` / `min_silence_duration_ms` arguments
-    2. Named preset via `mode` (one of VAD_PRESETS keys)
-    3. config.whisper.{speech_pad_ms, min_silence_duration_ms}
-    """
-    if mode is not None:
-        return Transcriber.get_vad_parameters(
-            mode=mode,
-            speech_pad_ms=speech_pad_ms,
-            min_silence_duration_ms=min_silence_duration_ms,
-        )
-    return Transcriber.get_vad_parameters(
-        speech_pad_ms=speech_pad_ms if speech_pad_ms is not None else config.whisper.speech_pad_ms,
-        min_silence_duration_ms=(
-            min_silence_duration_ms
-            if min_silence_duration_ms is not None
-            else config.whisper.min_silence_duration_ms
-        ),
-    )
-
-
 def run_pipeline(
     video_path: Path,
     config: AppConfig,
     *,
-    transcriber: Transcriber,
+    transcriber: AsrBackend,
     target_languages: List[str],
     output_dir: Path,
     translator: Optional[SubtitleTranslator] = None,
@@ -172,7 +149,6 @@ def run_pipeline(
     timestamp_mode: Optional[str] = None,
     split_sentences: Optional[bool] = None,
     post_process: bool = True,
-    vad_parameters: Optional[dict] = None,
     hooks: Optional[PipelineHooks] = None,
 ) -> PipelineResult:
     """Core video → subtitles pipeline.
@@ -220,21 +196,19 @@ def run_pipeline(
             split_sentences_override=split_sentences,
         )
 
-        segments, info = transcriber.transcribe(
-            audio_path,
-            language=source_language,
-            beam_size=config.whisper.beam_size,
-            vad_filter=config.whisper.vad_filter,
-            batch_size=config.whisper.batch_size,
-            vad_parameters=vad_parameters,
-            post_process=post_process and config.timestamp.enabled,
-            timestamp_config=timestamp_config,
-        )
+        segments, info = transcriber.transcribe(audio_path, language=source_language)
         detected_language = info.language
+
+        # None when timestamp.enabled is off at the config level.
+        post_processed = post_process and timestamp_config is not None
+        if post_processed:
+            assert timestamp_config is not None  # restated for the type checker
+            processor = TimestampProcessor(timestamp_config, language=detected_language)
+            segments = processor.process(segments, info.duration)
 
         # mode=off and disabled post-processing promise raw timing, so only minimal / full
         # output is held to the structure check.
-        checked = post_process and timestamp_config is not None and timestamp_config.mode != "off"
+        checked = post_processed and timestamp_config is not None and timestamp_config.mode != "off"
         failures: Dict[Path, List[str]] = {}
 
         def save(

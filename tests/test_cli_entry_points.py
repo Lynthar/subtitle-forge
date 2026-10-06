@@ -12,8 +12,8 @@ pytest.importorskip("ffmpeg", reason="core.audio imports ffmpeg-python")
 pytest.importorskip("faster_whisper", reason="core.transcriber imports faster_whisper")
 
 from subtitle_forge.cli.app import app  # noqa: E402
+from subtitle_forge.core import asr as asr_module  # noqa: E402
 from subtitle_forge.core import pipeline as pipeline_module  # noqa: E402
-from subtitle_forge.core import transcriber as transcriber_module  # noqa: E402
 from subtitle_forge.core import translator as translator_module  # noqa: E402
 from subtitle_forge.models.subtitle import SubtitleSegment  # noqa: E402
 
@@ -30,15 +30,6 @@ class _FakeInfo:
 
 
 class _FakeTranscriber:
-    use_whisperx = False
-
-    def __init__(self, *args, **kwargs):
-        pass
-
-    @classmethod
-    def from_config(cls, cfg, **overrides):
-        return cls()
-
     def is_model_cached(self):
         return True
 
@@ -88,7 +79,7 @@ class _FakeExtractor:
 
 def _fake_components(monkeypatch):
     transcribe_calls.clear()
-    monkeypatch.setattr(transcriber_module, "Transcriber", _FakeTranscriber)
+    monkeypatch.setattr(asr_module, "create_backend", lambda config, **o: _FakeTranscriber())
     monkeypatch.setattr(translator_module, "SubtitleTranslator", _FakeTranslator)
     monkeypatch.setattr(pipeline_module, "AudioExtractor", _FakeExtractor)
 
@@ -135,15 +126,23 @@ def test_transcribe_defaults_to_the_detected_language_beside_the_video(tmp_path,
 def test_transcribe_passes_its_timing_flags_down(tmp_path, monkeypatch):
     _fake_components(monkeypatch)
     video = _video(tmp_path)
+    used = []
+
+    class _RecordingProcessor:
+        def __init__(self, config, language=None):
+            used.append(config)
+
+        def process(self, segments, audio_duration=None):
+            return segments
+
+    monkeypatch.setattr(pipeline_module, "TimestampProcessor", _RecordingProcessor)
 
     result = _run(
         tmp_path, "transcribe", str(video), "--timestamp-mode", "full", "--no-split-sentences"
     )
 
     assert result.exit_code == 0, result.output
-    call = transcribe_calls[0]
-    assert call["timestamp_config"].mode == "full"
-    assert call["timestamp_config"].split_sentences is False
+    assert [(c.mode, c.split_sentences) for c in used] == [("full", False)]
 
 
 def test_batch_writes_original_and_translation_for_every_video(tmp_path, monkeypatch):

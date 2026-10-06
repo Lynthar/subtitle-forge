@@ -24,7 +24,7 @@ from ..models.task import VideoTask, TaskStatus
 
 if TYPE_CHECKING:
     from ..core.model_manager import DownloadProgress
-    from ..core.transcriber import Transcriber
+    from ..core.asr import AsrBackend
 
 console = Console()
 
@@ -76,8 +76,8 @@ def _quiet_download_logs() -> Iterator[None]:
             lg.setLevel(level)
 
 
-def download_whisper_with_progress(transcriber: "Transcriber") -> None:
-    """Download the transcriber's Whisper model behind a progress bar; download errors propagate."""
+def download_asr_model_with_progress(transcriber: "AsrBackend") -> None:
+    """Download the backend's model behind a progress bar; download errors propagate."""
     with (
         _quiet_download_logs(),
         _download_bar("Downloading...", transcriber.get_model_size()) as (progress, task),

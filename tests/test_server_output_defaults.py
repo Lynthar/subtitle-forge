@@ -1,11 +1,10 @@
 """POST /jobs without bilingual / keep_original takes the configured output section — the
 server used to hard-code False / True and never read config.output. The processor is stubbed
-(no Whisper, no ffmpeg); server.app imports faster-whisper via core.pipeline, hence the skip."""
+(no Whisper, no ffmpeg); skips without the [serve] extra."""
 
 import pytest
 
 pytest.importorskip("fastapi", reason="server needs the [serve] extra")
-pytest.importorskip("faster_whisper", reason="server.processing imports core.transcriber")
 
 from fastapi.testclient import TestClient  # noqa: E402
 

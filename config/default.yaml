@@ -6,6 +6,11 @@
 # ~/.config/subtitle-forge/config.yaml (Windows: %APPDATA%\subtitle-forge\).
 # tests/test_config.py keeps this file in sync with the code defaults.
 
+asr:
+  # Speech recognition backend; its settings live in the section of the same name below
+  # Options: whisper
+  backend: whisper
+
 whisper:
   # Whisper model name
   # Options: tiny, base, small, medium, large-v2, large-v3, distil-large-v3

@@ -75,14 +75,15 @@ def transcribe_video(
         subtitle-forge transcribe video.mp4
         subtitle-forge transcribe video.mp4 --language en --model large-v3
     """
-    from ...core.pipeline import PipelineHooks, build_vad_parameters, run_pipeline
+    from ...core.asr import create_backend
+    from ...core.pipeline import PipelineHooks, run_pipeline
     from ...core.transcriber import Transcriber
     from ...utils.progress import (
         SubtitleProgress,
         print_success,
         print_error,
         print_info,
-        download_whisper_with_progress,
+        download_asr_model_with_progress,
     )
     from ...utils.logger import setup_logging
     from ..app import get_config
@@ -118,14 +119,16 @@ def transcribe_video(
         # Determine WhisperX usage
         whisperx_enabled = use_whisperx if use_whisperx is not None else config.whisper.use_whisperx
 
-        transcriber = Transcriber.from_config(
-            config.whisper,
+        transcriber = create_backend(
+            config,
             model_name=model_name,
             use_whisperx=whisperx_enabled,
+            vad_filter=vad_filter,
+            batch_size=config.whisper.batch_size if batch_size is None else batch_size,
         )
 
         # Log which backend will be used
-        if transcriber.use_whisperx:
+        if isinstance(transcriber, Transcriber) and transcriber.use_whisperx:
             print_info("Using WhisperX for improved timestamp accuracy")
 
         # Check and download Whisper model if needed (separate progress bar)
@@ -133,15 +136,10 @@ def transcribe_video(
             model_size_mb = transcriber.get_model_size() / (1024 * 1024)
             console.print(f"\n[cyan]Downloading Whisper model: {model_name}[/cyan]")
             console.print(f"[dim]Model size: ~{model_size_mb:.0f}MB (one-time download)[/dim]\n")
-            download_whisper_with_progress(transcriber)
+            download_asr_model_with_progress(transcriber)
             print_info("Whisper model downloaded successfully!\n")
 
         # ========== Phase 2: Main processing (single progress bar) ==========
-
-        # CLI overrides go onto the config, which is what run_pipeline reads.
-        config.whisper.vad_filter = vad_filter
-        if batch_size is not None:
-            config.whisper.batch_size = batch_size
 
         with progress.track_video(video.name, total_steps=3) as tracker:
             tracker.set_description("Extracting audio...")
@@ -171,7 +169,6 @@ def transcribe_video(
                 timestamp_mode=timestamp_mode,
                 split_sentences=split_sentences,
                 post_process=post_process,
-                vad_parameters=build_vad_parameters(config),
                 hooks=PipelineHooks(
                     on_audio_extracted=hook_audio_extracted,
                     on_transcribe_complete=hook_transcribe_complete,
@@ -183,8 +180,7 @@ def transcribe_video(
 
         print_success(
             f"Transcription complete!\n"
-            f"  Detected language: {result.detected_language} "
-            f"({result.language_probability:.1%})\n"
+            f"  Detected language: {result.describe_language()}\n"
             f"  Segments: {result.segment_count}\n"
             f"  Output: {result.outputs[0].path}"
         )

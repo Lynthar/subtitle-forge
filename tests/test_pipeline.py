@@ -1,13 +1,12 @@
 """Contract of `core.pipeline.run_pipeline` with fake transcriber, translator and extractor.
 
-Subtitle files are real; skips when ffmpeg-python or faster-whisper is absent (pipeline imports)."""
+Subtitle files are real; skips when ffmpeg-python is absent (core.audio imports it)."""
 
 from pathlib import Path
 
 import pytest
 
 pytest.importorskip("ffmpeg", reason="core.audio imports ffmpeg-python")
-pytest.importorskip("faster_whisper", reason="core.transcriber imports faster_whisper")
 
 from subtitle_forge.core import pipeline as pipeline_module  # noqa: E402
 from subtitle_forge.core.pipeline import (  # noqa: E402
@@ -16,6 +15,7 @@ from subtitle_forge.core.pipeline import (  # noqa: E402
     StructureCheckError,
     run_pipeline,
 )
+from subtitle_forge.core.subtitle import SubtitleProcessor  # noqa: E402
 from subtitle_forge.models.config import AppConfig  # noqa: E402
 from subtitle_forge.models.subtitle import SubtitleSegment  # noqa: E402
 from subtitle_forge.server import processing  # noqa: E402
@@ -254,9 +254,7 @@ def test_invalid_language_code_is_rejected_before_extraction(tmp_path, video, fa
     assert fake_audio == []
 
 
-def test_timestamp_and_vad_settings_reach_the_transcriber(tmp_path, video, fake_audio):
-    out_dir = tmp_path / "out"
-    out_dir.mkdir()
+def test_source_language_reaches_the_backend(tmp_path, video, fake_audio):
     transcriber = _FakeTranscriber()
 
     run_pipeline(
@@ -264,17 +262,43 @@ def test_timestamp_and_vad_settings_reach_the_transcriber(tmp_path, video, fake_
         AppConfig(),
         transcriber=transcriber,
         target_languages=[],
-        output_dir=out_dir,
-        timestamp_mode="full",
-        split_sentences=False,
-        vad_parameters={"speech_pad_ms": 111},
+        output_dir=tmp_path,
+        source_language="ja",
     )
 
-    call = transcriber.calls[0]
-    assert call["vad_parameters"] == {"speech_pad_ms": 111}
-    assert call["timestamp_config"].mode == "full"
-    assert call["timestamp_config"].split_sentences is False
-    assert call["post_process"] is True
+    assert transcriber.calls[0]["language"] == "ja"
+
+
+@pytest.mark.parametrize("post_process, processed", [(True, True), (False, False)])
+def test_the_pipeline_post_processes_raw_backend_timing(
+    tmp_path, video, fake_audio, post_process, processed
+):
+    # The backend hands back raw timing; the default 80 ms lead-in moves the 2.0 s cue earlier.
+    run_pipeline(
+        video,
+        AppConfig(),
+        transcriber=_FakeTranscriber(),
+        target_languages=[],
+        output_dir=tmp_path,
+        post_process=post_process,
+    )
+
+    second_start = SubtitleProcessor().load(tmp_path / "clip.en.srt")[1].start
+    assert (second_start < 1.95) is processed
+
+
+@pytest.fixture()
+def unprocessed(monkeypatch):
+    """Lets backend timing through post-processing untouched, so the structure check sees it."""
+
+    class _PassThrough:
+        def __init__(self, config, language=None):
+            pass
+
+        def process(self, segments, audio_duration=None):
+            return segments
+
+    monkeypatch.setattr(pipeline_module, "TimestampProcessor", _PassThrough)
 
 
 _OVERLAPPING = [
@@ -283,7 +307,9 @@ _OVERLAPPING = [
 ]
 
 
-def test_structure_violation_writes_every_file_then_raises(tmp_path, video, fake_audio):
+def test_structure_violation_writes_every_file_then_raises(
+    tmp_path, video, fake_audio, unprocessed
+):
     out_dir = tmp_path / "out"
     out_dir.mkdir()
 
@@ -304,7 +330,7 @@ def test_structure_violation_writes_every_file_then_raises(tmp_path, video, fake
     assert "#2: overlaps previous by 500 ms" in str(caught.value)
 
 
-def test_output_past_the_audio_end_fails_the_check(tmp_path, video, fake_audio):
+def test_output_past_the_audio_end_fails_the_check(tmp_path, video, fake_audio, unprocessed):
     with pytest.raises(StructureCheckError, match="ends past the audio"):
         run_pipeline(
             video,
