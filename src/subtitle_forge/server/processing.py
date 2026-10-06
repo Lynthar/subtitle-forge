@@ -12,9 +12,9 @@ The runner invokes `make_processor(...)`'s closure inside
 import logging
 import threading
 from pathlib import Path
-from typing import Optional
+from typing import List, Optional
 
-from ..core.pipeline import build_vad_parameters, run_pipeline
+from ..core.pipeline import PipelineOutput, StructureCheckError, build_vad_parameters, run_pipeline
 from ..core.transcriber import Transcriber
 from ..core.translator import SubtitleTranslator
 from ..models.config import AppConfig
@@ -78,23 +78,32 @@ def _run_job(job: Job, config: AppConfig, transcriber: Transcriber) -> list:
 
     vad_params = build_vad_parameters(config)
 
-    result = run_pipeline(
-        video_path,
-        config,
-        transcriber=transcriber,
-        translator=translator,
-        target_languages=job.target_languages,
-        output_dir=video_path.parent,
-        source_language=job.source_language,
-        keep_original=job.keep_original,
-        bilingual=job.bilingual,
-        vad_parameters=vad_params,
-        # No hooks — server runs silently; logging inside translator/
-        # transcriber covers operational visibility.
-    )
+    try:
+        result = run_pipeline(
+            video_path,
+            config,
+            transcriber=transcriber,
+            translator=translator,
+            target_languages=job.target_languages,
+            output_dir=video_path.parent,
+            source_language=job.source_language,
+            keep_original=job.keep_original,
+            bilingual=job.bilingual,
+            vad_parameters=vad_params,
+            # No hooks — server runs silently; logging inside translator/
+            # transcriber covers operational visibility.
+        )
+    except StructureCheckError as e:
+        # The job fails, but the files are on disk: list them so the caller can find them.
+        job.outputs = _describe(e.outputs)
+        raise
 
     # Surface the detected language back through the job record so callers
     # polling /jobs/{id} see it once transcription completes.
     job.source_language = result.detected_language
 
-    return [{"language": o.language, "path": str(o.path)} for o in result.outputs]
+    return _describe(result.outputs)
+
+
+def _describe(outputs: List[PipelineOutput]) -> List[dict]:
+    return [{"language": o.language, "path": str(o.path)} for o in outputs]

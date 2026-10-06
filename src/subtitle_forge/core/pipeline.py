@@ -17,11 +17,19 @@ The pipeline cleans up its own audio scratch file in a finally block.
 import logging
 from dataclasses import dataclass, field, replace
 from pathlib import Path
-from typing import Callable, ContextManager, List, Optional
+from typing import Callable, ContextManager, Dict, List, Optional
 
+from ..exceptions import SubtitleError
 from ..models.config import AppConfig, TimestampConfig
+from ..models.subtitle import SubtitleSegment
 from .audio import AudioExtractor
-from .subtitle import SubtitleProcessor, normalize_target_languages, validate_language_codes
+from .subtitle import (
+    SubtitleProcessor,
+    check_structure,
+    check_translation,
+    normalize_target_languages,
+    validate_language_codes,
+)
 from .transcriber import Transcriber
 from .translator import SubtitleTranslator
 
@@ -44,6 +52,19 @@ class PipelineResult:
     language_probability: float
     segment_count: int
     outputs: List[PipelineOutput] = field(default_factory=list)
+
+
+class StructureCheckError(SubtitleError):
+    """Written subtitle files failed the structure check; the files are kept on disk."""
+
+    def __init__(self, failures: Dict[Path, List[str]], outputs: List[PipelineOutput]):
+        self.failures = failures
+        self.outputs = outputs
+        lines = ["Subtitle structure check failed (files were written):"]
+        for path, found in failures.items():
+            more = f"; and {len(found) - 5} more" if len(found) > 5 else ""
+            lines.append(f"  {path}: {'; '.join(found[:5])}{more}")
+        super().__init__("\n".join(lines))
 
 
 @dataclass
@@ -169,6 +190,9 @@ def run_pipeline(
     Raises:
         ValueError: target_languages is non-empty and translator is None, or a
             language code is not filename-safe.
+        StructureCheckError: in minimal / full timestamp mode, a written file
+            overlaps, has a non-positive duration, runs past the audio, or (for a
+            translation) lost or renumbered segments. Raised after every file is written.
     """
     hooks = hooks or PipelineHooks()
     extractor = AudioExtractor()
@@ -208,6 +232,25 @@ def run_pipeline(
         )
         detected_language = info.language
 
+        # mode=off and disabled post-processing promise raw timing, so only minimal / full
+        # output is held to the structure check.
+        checked = post_process and timestamp_config is not None and timestamp_config.mode != "off"
+        failures: Dict[Path, List[str]] = {}
+
+        def save(
+            subtitles: List[SubtitleSegment],
+            path: Path,
+            translation: Optional[List[SubtitleSegment]] = None,
+        ) -> None:
+            subtitle_processor.save(subtitles, path)
+            if checked:
+                found = check_structure(subtitles, info.duration)
+                # Checked before any bilingual merge, which hides a missing line behind the original.
+                if translation is not None:
+                    found += check_translation(translation, segments)
+                if found:
+                    failures[path] = found
+
         if hooks.on_transcribe_complete is not None:
             hooks.on_transcribe_complete(len(segments), detected_language)
 
@@ -215,7 +258,7 @@ def run_pipeline(
 
         if keep_original:
             original_srt = original_output_path or output_dir / f"{stem}.{detected_language}.srt"
-            subtitle_processor.save(segments, original_srt)
+            save(segments, original_srt)
             outputs.append(PipelineOutput(language=detected_language, path=original_srt))
             if hooks.on_original_saved is not None:
                 hooks.on_original_saved(original_srt)
@@ -245,17 +288,20 @@ def run_pipeline(
                     segments, translated, original_on_top=config.output.original_on_top
                 )
                 out_path = output_dir / f"{stem}.{detected_language}-{lang}.srt"
-                subtitle_processor.save(merged, out_path)
+                save(merged, out_path, translation=translated)
                 label = f"{detected_language}-{lang}"
             else:
                 out_path = output_dir / f"{stem}.{lang}.srt"
-                subtitle_processor.save(translated, out_path)
+                save(translated, out_path, translation=translated)
                 label = lang
 
             outputs.append(PipelineOutput(language=label, path=out_path))
 
             if hooks.on_translation_saved is not None:
                 hooks.on_translation_saved(out_path, label)
+
+        if failures:
+            raise StructureCheckError(failures, outputs)
 
         return PipelineResult(
             detected_language=detected_language,

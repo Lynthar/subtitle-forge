@@ -180,7 +180,7 @@ class TimestampProcessor:
             segments = self._ensure_minimum_gap(segments)
             if audio_duration:
                 segments = self._clamp_to_duration(segments, audio_duration)
-            return self._reindex(segments)
+            return self._reindex(self._merge_collisions(segments))
 
         # Mode: full - complete processing (original behavior)
         logger.debug("Timestamp processing mode: full")
@@ -201,6 +201,7 @@ class TimestampProcessor:
         # 3. Clamp to audio duration if known
         if audio_duration:
             segments = self._clamp_to_duration(segments, audio_duration)
+        segments = self._merge_collisions(segments)
 
         # 4. Detect potential gaps (missing speech)
         self._detect_large_gaps(segments, audio_duration)
@@ -557,6 +558,27 @@ class TimestampProcessor:
                     words=seg.words,
                     confidence=seg.confidence,
                 )
+            result.append(seg)
+        return result
+
+    def _merge_collisions(self, segments: List[SubtitleSegment]) -> List[SubtitleSegment]:
+        """Merge each segment still overlapping its predecessor into it; runs last, before reindex.
+
+        Any earlier and an overlap ships: the gap pass keeps cues >= 0.1s, the clamp stacks the tail.
+        """
+        result: List[SubtitleSegment] = []
+        for seg in segments:
+            if result and seg.start < result[-1].end:
+                prev = result[-1]
+                result[-1] = SubtitleSegment(
+                    index=prev.index,
+                    start=prev.start,
+                    end=max(prev.end, seg.end),
+                    text=self._join_words([prev.text, seg.text]),
+                    words=prev.words + seg.words if prev.words and seg.words else None,
+                    confidence=min(prev.confidence, seg.confidence),
+                )
+                continue
             result.append(seg)
         return result
 

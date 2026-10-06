@@ -245,3 +245,43 @@ class SubtitleProcessor:
             )
 
         return merged
+
+
+def check_translation(
+    translation: List[SubtitleSegment], source: List[SubtitleSegment]
+) -> List[str]:
+    """N in, N out: a translation keeps its source's segment count and index sequence."""
+    if len(translation) != len(source):
+        return [f"{len(translation)} segments out for {len(source)} in"]
+    if [s.index for s in translation] != [s.index for s in source]:
+        return ["segment indices differ from the source's"]
+    return []
+
+
+def check_structure(
+    segments: List[SubtitleSegment], audio_duration: Optional[float] = None
+) -> List[str]:
+    """Structural violations of the SRT these segments are written as; empty means sound.
+
+    Times are judged at the millisecond the file stores; a falsy audio_duration skips the end check.
+    """
+    violations: List[str] = []
+    seen = set()
+    audio_end_ms = audio_duration * 1000 if audio_duration else None
+    prev_end_ms = None
+    for seg in segments:
+        start_ms = SubtitleProcessor.seconds_to_time(seg.start).ordinal
+        end_ms = SubtitleProcessor.seconds_to_time(seg.end).ordinal
+        if seg.index in seen:
+            violations.append(f"#{seg.index}: duplicate index")
+        seen.add(seg.index)
+        if start_ms < 0:
+            violations.append(f"#{seg.index}: starts before 0")
+        if end_ms <= start_ms:
+            violations.append(f"#{seg.index}: non-positive duration ({start_ms}-{end_ms} ms)")
+        if prev_end_ms is not None and start_ms < prev_end_ms:
+            violations.append(f"#{seg.index}: overlaps previous by {prev_end_ms - start_ms} ms")
+        if audio_end_ms is not None and end_ms > audio_end_ms:
+            violations.append(f"#{seg.index}: ends past the audio ({end_ms} ms)")
+        prev_end_ms = end_ms
+    return violations

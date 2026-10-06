@@ -26,6 +26,7 @@ transcribe_calls = []
 class _FakeInfo:
     language = "en"
     language_probability = 0.99
+    duration = 60.0
 
 
 class _FakeTranscriber:

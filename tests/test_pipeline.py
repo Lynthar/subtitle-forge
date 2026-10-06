@@ -10,22 +10,31 @@ pytest.importorskip("ffmpeg", reason="core.audio imports ffmpeg-python")
 pytest.importorskip("faster_whisper", reason="core.transcriber imports faster_whisper")
 
 from subtitle_forge.core import pipeline as pipeline_module  # noqa: E402
-from subtitle_forge.core.pipeline import PipelineHooks, run_pipeline  # noqa: E402
+from subtitle_forge.core.pipeline import (  # noqa: E402
+    PipelineHooks,
+    PipelineOutput,
+    StructureCheckError,
+    run_pipeline,
+)
 from subtitle_forge.models.config import AppConfig  # noqa: E402
 from subtitle_forge.models.subtitle import SubtitleSegment  # noqa: E402
+from subtitle_forge.server import processing  # noqa: E402
+from subtitle_forge.server.jobs import Job  # noqa: E402
 
 
 class _FakeInfo:
-    def __init__(self, language="en", language_probability=0.98):
+    def __init__(self, language="en", language_probability=0.98, duration=60.0):
         self.language = language
         self.language_probability = language_probability
+        self.duration = duration
 
 
 class _FakeTranscriber:
-    """Records what it was asked to do and returns two fixed segments."""
+    """Records what it was asked to do and returns fixed segments (two clean ones by default)."""
 
-    def __init__(self, language="en"):
-        self.info = _FakeInfo(language=language)
+    def __init__(self, language="en", segments=None, duration=60.0):
+        self.info = _FakeInfo(language=language, duration=duration)
+        self.segments = segments
         self.calls = []
         self.raise_on_transcribe = None
 
@@ -33,7 +42,7 @@ class _FakeTranscriber:
         self.calls.append({"audio_path": Path(audio_path), **kwargs})
         if self.raise_on_transcribe is not None:
             raise self.raise_on_transcribe
-        segments = [
+        segments = self.segments or [
             SubtitleSegment(index=1, start=0.0, end=1.5, text="Hello there"),
             SubtitleSegment(index=2, start=2.0, end=3.5, text="General Kenobi"),
         ]
@@ -43,19 +52,21 @@ class _FakeTranscriber:
 class _FakeTranslator:
     """Prefixes each line with the target language; records every call."""
 
-    def __init__(self):
+    def __init__(self, drop_last=False):
         self.calls = []
+        self.drop_last = drop_last
 
     def translate(self, segments, source_lang, target_lang, progress_callback=None):
         self.calls.append((source_lang, target_lang))
         if progress_callback is not None:
             progress_callback(len(segments), len(segments))
-        return [
+        translated = [
             SubtitleSegment(
                 index=s.index, start=s.start, end=s.end, text=f"[{target_lang}] {s.text}"
             )
             for s in segments
         ]
+        return translated[:-1] if self.drop_last else translated
 
 
 @pytest.fixture()
@@ -264,3 +275,87 @@ def test_timestamp_and_vad_settings_reach_the_transcriber(tmp_path, video, fake_
     assert call["timestamp_config"].mode == "full"
     assert call["timestamp_config"].split_sentences is False
     assert call["post_process"] is True
+
+
+_OVERLAPPING = [
+    SubtitleSegment(index=1, start=0.0, end=2.0, text="Hello there"),
+    SubtitleSegment(index=2, start=1.5, end=3.5, text="General Kenobi"),
+]
+
+
+def test_structure_violation_writes_every_file_then_raises(tmp_path, video, fake_audio):
+    out_dir = tmp_path / "out"
+    out_dir.mkdir()
+
+    with pytest.raises(StructureCheckError) as caught:
+        run_pipeline(
+            video,
+            AppConfig(),
+            transcriber=_FakeTranscriber(segments=_OVERLAPPING),
+            translator=_FakeTranslator(),
+            target_languages=["zh"],
+            output_dir=out_dir,
+        )
+
+    written = [out_dir / "clip.en.srt", out_dir / "clip.zh.srt"]
+    assert all(path.exists() for path in written)
+    assert [o.path for o in caught.value.outputs] == written
+    assert caught.value.failures == {path: ["#2: overlaps previous by 500 ms"] for path in written}
+    assert "#2: overlaps previous by 500 ms" in str(caught.value)
+
+
+def test_output_past_the_audio_end_fails_the_check(tmp_path, video, fake_audio):
+    with pytest.raises(StructureCheckError, match="ends past the audio"):
+        run_pipeline(
+            video,
+            AppConfig(),
+            transcriber=_FakeTranscriber(duration=3.0),
+            target_languages=[],
+            output_dir=tmp_path,
+        )
+
+
+@pytest.mark.parametrize("overrides", [{"timestamp_mode": "off"}, {"post_process": False}])
+def test_raw_timing_is_not_checked(tmp_path, video, fake_audio, overrides):
+    result = run_pipeline(
+        video,
+        AppConfig(),
+        transcriber=_FakeTranscriber(segments=_OVERLAPPING),
+        target_languages=[],
+        output_dir=tmp_path,
+        **overrides,
+    )
+
+    assert [o.path.name for o in result.outputs] == ["clip.en.srt"]
+
+
+def test_bilingual_merge_does_not_hide_a_lost_translation(tmp_path, video, fake_audio):
+    # The merge falls back to the original text for a missing line, so the merged file looks
+    # complete; the check has to look at the translation itself.
+    with pytest.raises(StructureCheckError, match="1 segments out for 2 in"):
+        run_pipeline(
+            video,
+            AppConfig(),
+            transcriber=_FakeTranscriber(),
+            translator=_FakeTranslator(drop_last=True),
+            target_languages=["zh"],
+            output_dir=tmp_path,
+            keep_original=False,
+            bilingual=True,
+        )
+
+
+def test_server_job_lists_the_written_files_when_the_check_fails(tmp_path, monkeypatch):
+    output = PipelineOutput(language="en", path=tmp_path / "clip.en.srt")
+
+    def failing_pipeline(*args, **kwargs):
+        raise StructureCheckError({output.path: ["#2: overlaps previous by 500 ms"]}, [output])
+
+    monkeypatch.setattr(processing, "run_pipeline", failing_pipeline)
+    monkeypatch.setattr(processing.SubtitleTranslator, "from_config", lambda *a, **k: None)
+    job = Job(job_id="j", video_path=str(tmp_path / "clip.mp4"), target_languages=["zh"])
+
+    with pytest.raises(StructureCheckError):
+        processing._run_job(job, AppConfig(), transcriber=None)
+
+    assert job.outputs == [{"language": "en", "path": str(output.path)}]
