@@ -2,24 +2,25 @@
 
 [![license](https://img.shields.io/github/license/Lynthar/subtitle-forge)](LICENSE)
 
-本地优先的视频字幕流水线：faster-whisper 转写 + Ollama 本地大模型翻译，CLI 与 HTTP 服务同源
+本地优先的视频字幕流水线：faster-whisper 转写 + 本地大模型翻译（Ollama 或任意 OpenAI 兼容服务），CLI 与 HTTP 服务同源
 
 [English](README.md) | 简体中文
 
 给它一个视频文件，它转写出字幕，再翻译成你指定的语言。我计划的是一条能脚本化的自动
-批量字幕生产流水线，并且除非你把 Ollama 的地址指向另一台机器，否则你的音视频和字幕
+批量字幕生产流水线，并且除非你把翻译指向另一台机器或云端 API，否则你的音视频和字幕
 内容都不会离开本地。CLI 和 HTTP 服务跑的是同一份代码，服务端只是在前面加了一个任务
 队列。
 
 ```mermaid
 flowchart LR
-    V[video.mp4] --> F[ffmpeg<br>抽音] --> W[faster-whisper<br>转写] --> X[WhisperX<br>逐词对齐，可选] --> T[时轴后处理<br>VAD、留白、拆句] --> O[Ollama<br>翻译] --> S[video.zh.srt]
+    V[video.mp4] --> F[ffmpeg<br>抽音] --> W[faster-whisper<br>转写] --> X[WhisperX<br>逐词对齐，可选] --> T[时轴后处理<br>VAD、留白、拆句] --> O[大模型<br>翻译] --> S[video.zh.srt]
 ```
 
 ## 安装
 
 **没有发布到 PyPI**，需要从源码安装。前置条件：Python 3.11+、PATH 里有 `ffmpeg`、以及
-一个正在运行的 Ollama。
+一个翻译服务：正在运行的 Ollama，或者任意 OpenAI 兼容服务（LM Studio、llama.cpp、vLLM、
+云端 API）。
 
 ```bash
 git clone https://github.com/Lynthar/subtitle-forge.git
@@ -76,6 +77,7 @@ subtitle-forge serve --host 127.0.0.1 --port 8765
 | `whisper.model` | `large-v3` |
 | `whisper.device` / `compute_type` | `cuda` / `float16` |
 | `whisper.use_whisperx` | `true` |
+| `translation.backend` | `ollama`（或 `openai`） |
 | `ollama.model` | `qwen2.5:14b` |
 | `ollama.host` | `http://localhost:11434` |
 | `timestamp.mode` | `minimal` |
@@ -86,8 +88,9 @@ subtitle-forge serve --host 127.0.0.1 --port 8765
 ## 能力边界
 
 - **只输出 SRT**，不支持 WebVTT、ASS 和 TTML。
-- **翻译必须有 Ollama。** 没有 Ollama 仍然可以 `transcribe`，但也只能做到这一步：翻译
-  不走云端，也不自带模型。
+- **翻译需要一个你配置好的服务**：Ollama，或 OpenAI 兼容服务。没有的话仍然可以
+  `transcribe`，但也只能做到这一步。只用配置里选中的那一个后端，不会换用别的，不自带模型，
+  没配云端就不会往云端发。
 - **Whisper 的 99 种语言指的是转写能力。** 翻译这边只有十四种有正式语言名，其余的会把
   语言码原样交给模型。
 - **音轨是按声道数选的**，所以一个 2.0 主音轨加 5.1 导演解说的片源，可能转写的是解说。

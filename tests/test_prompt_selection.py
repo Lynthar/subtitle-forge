@@ -1,14 +1,15 @@
 """Which prompt the CLI reports, exports and reverts to, and which one the translator runs.
 
-Covers `prompt_template` (custom text) and `prompt_template_id` (library id); no Ollama needed."""
+Covers `translation.prompt_template_id` and `config set-prompt`; no server needed."""
 
 import pytest
 from typer.testing import CliRunner
 
 from subtitle_forge.cli.app import app
-from subtitle_forge.core.prompt_library import get_prompt_library
-from subtitle_forge.core.translator import SubtitleTranslator, TranslationConfig
-from subtitle_forge.models.config import AppConfig
+from subtitle_forge.core import prompt_library
+from subtitle_forge.core.prompt_library import CUSTOM_TEMPLATE_ID, PromptLibrary, get_prompt_library
+from subtitle_forge.core.translator import SubtitleTranslator
+from subtitle_forge.models.config import AppConfig, TranslationConfig
 from subtitle_forge.models.subtitle import SubtitleSegment
 
 runner = CliRunner()
@@ -23,7 +24,7 @@ def _run(cfg_path, *args):
 def _select_library_template(cfg_path):
     result = _run(cfg_path, "config", "use-prompt", LIBRARY_ID)
     assert result.exit_code == 0, result.output
-    assert AppConfig.load(cfg_path).ollama.prompt_template_id == LIBRARY_ID
+    assert AppConfig.load(cfg_path).translation.prompt_template_id == LIBRARY_ID
 
 
 def test_reset_prompt_clears_a_library_selection(tmp_path):
@@ -34,9 +35,7 @@ def test_reset_prompt_clears_a_library_selection(tmp_path):
 
     assert result.exit_code == 0, result.output
     assert "Already using default" not in result.output
-    saved = AppConfig.load(cfg_path)
-    assert saved.ollama.prompt_template is None
-    assert saved.ollama.prompt_template_id is None
+    assert AppConfig.load(cfg_path).translation.prompt_template_id is None
 
 
 def test_reset_prompt_reports_no_change_when_already_default(tmp_path):
@@ -107,25 +106,47 @@ def test_process_rejects_an_unknown_prompt_template_id(tmp_path, monkeypatch):
     assert "not found" in result.output
 
 
-class _RecordingClient:
+class _RecordingChat:
+    model = "qwen2.5:14b"
+
     def __init__(self, reply):
         self.reply = reply
-        self.calls = []
+        self.json_keys = []
 
-    def chat(self, **kwargs):
-        self.calls.append(kwargs)
-        return {"message": {"content": self.reply}}
+    def chat(self, prompt, *, json_keys=None):
+        self.json_keys.append(json_keys)
+        return self.reply
 
 
 @pytest.mark.parametrize("config", [{}, {"prompt_template_id": "no-such-template"}])
 def test_the_default_prompt_runs_in_json_mode_however_it_was_reached(config):
     # A dangling id falls back to the default body, so the reply must parse and clean the same way.
-    translator = SubtitleTranslator(TranslationConfig(**config))
-    client = _RecordingClient('{"translations": {"1": "[3] 天后"}}')
-    translator._client = client
+    chat = _RecordingChat('{"translations": {"1": "[3] 天后"}}')
+    translator = SubtitleTranslator(TranslationConfig(**config), chat)
     segment = SubtitleSegment(index=1, start=0.0, end=1.0, text="[3] days later")
 
     out = translator.translate_batch([segment], "en", "zh")
 
     assert out[0].text == "[3] 天后"
-    assert client.calls[0].get("format") == "json"
+    assert chat.json_keys == [["1"]]
+
+
+@pytest.fixture
+def user_templates(tmp_path, monkeypatch):
+    monkeypatch.setattr(PromptLibrary, "USER_TEMPLATES_DIR", tmp_path / "prompts")
+    monkeypatch.setattr(prompt_library, "_library", None)
+    return tmp_path / "prompts"
+
+
+def test_set_prompt_stores_the_text_as_the_custom_template_and_selects_it(tmp_path, user_templates):
+    cfg_path = tmp_path / "config.yaml"
+    body = "Translate {source_lang} to {target_lang}:\n{segments}"
+    prompt_file = tmp_path / "mine.txt"
+    for text in ("first {source_lang} {target_lang} {segments}", body):  # the second replaces
+        prompt_file.write_text(text, encoding="utf-8")
+        result = _run(cfg_path, "config", "set-prompt", "-f", str(prompt_file))
+        assert result.exit_code == 0, result.output
+
+    assert AppConfig.load(cfg_path).translation.prompt_template_id == CUSTOM_TEMPLATE_ID
+    assert get_prompt_library().get_template(CUSTOM_TEMPLATE_ID).template == body
+    assert (user_templates / f"{CUSTOM_TEMPLATE_ID}.json").exists()

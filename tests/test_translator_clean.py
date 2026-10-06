@@ -5,20 +5,24 @@ stripped a *bare* leading number, so any translation that legitimately began
 with a digit lost it (and a pure-number line was erased entirely).
 """
 
-from subtitle_forge.core.translator import SubtitleTranslator, TranslationConfig
+from types import SimpleNamespace
+
+from subtitle_forge.core.translator import SubtitleTranslator
+from subtitle_forge.models.config import TranslationConfig
 from subtitle_forge.models.subtitle import SubtitleSegment
+
+# These tests never send a request.
+_NO_CHAT = SimpleNamespace(model="qwen2.5:14b")
 
 
 def _json_mode_translator():
     # Default config -> JSON mode (no custom/library prompt).
-    return SubtitleTranslator(TranslationConfig())
+    return SubtitleTranslator(TranslationConfig(), _NO_CHAT)
 
 
 def _legacy_mode_translator():
-    # A custom prompt template forces the legacy [N]-line path.
-    return SubtitleTranslator(
-        TranslationConfig(prompt_template="{source_lang}{target_lang}{segments}")
-    )
+    # A library template forces the legacy [N]-line path.
+    return SubtitleTranslator(TranslationConfig(prompt_template_id="movie-general"), _NO_CHAT)
 
 
 def test_json_mode_skips_index_stripping_entirely():

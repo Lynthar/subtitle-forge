@@ -2,25 +2,26 @@
 
 [![license](https://img.shields.io/github/license/Lynthar/subtitle-forge)](LICENSE)
 
-Local-first CLI and HTTP pipeline that transcribes video with faster-whisper and translates subtitles via Ollama
+Local-first CLI and HTTP pipeline that transcribes video with faster-whisper and translates subtitles with a local LLM via Ollama or any OpenAI-compatible server
 
 English | [简体中文](README.zh-CN.md)
 
 Give it a video file and it transcribes the subtitles, then translates them into
 the language you specify. What I set out to build is a scriptable pipeline for
-producing subtitles in bulk, and unless you point Ollama at another machine,
-none of your media or subtitle content leaves this one. The CLI and the HTTP
+producing subtitles in bulk, and unless you point translation at another machine
+or a cloud API, none of your media or subtitle content leaves this one. The CLI and the HTTP
 service run the same code; the service just puts a job queue in front of it.
 
 ```mermaid
 flowchart LR
-    V[video.mp4] --> F[ffmpeg<br>audio] --> W[faster-whisper<br>transcription] --> X[WhisperX<br>word alignment, optional] --> T[timing<br>VAD, padding, splitting] --> O[Ollama<br>translation] --> S[video.zh.srt]
+    V[video.mp4] --> F[ffmpeg<br>audio] --> W[faster-whisper<br>transcription] --> X[WhisperX<br>word alignment, optional] --> T[timing<br>VAD, padding, splitting] --> O[LLM<br>translation] --> S[video.zh.srt]
 ```
 
 ## Install
 
 Not published on PyPI; install from source. Prerequisites: Python 3.11+, `ffmpeg`
-on PATH, and a running Ollama.
+on PATH, and a translation server: a running Ollama, or any OpenAI-compatible one
+(LM Studio, llama.cpp, vLLM, a cloud API).
 
 ```bash
 git clone https://github.com/Lynthar/subtitle-forge.git
@@ -82,6 +83,7 @@ likely to change:
 | `whisper.model` | `large-v3` |
 | `whisper.device` / `compute_type` | `cuda` / `float16` |
 | `whisper.use_whisperx` | `true` |
+| `translation.backend` | `ollama` (or `openai`) |
 | `ollama.model` | `qwen2.5:14b` |
 | `ollama.host` | `http://localhost:11434` |
 | `timestamp.mode` | `minimal` |
@@ -93,8 +95,10 @@ read at runtime.
 ## Limitations
 
 - **SRT output only** — no WebVTT, ASS or TTML.
-- **Translation needs Ollama.** Without it you can still `transcribe`, but that's
-  as far as it goes: translation has no cloud fallback and no bundled model.
+- **Translation needs a server you configure**: Ollama, or an OpenAI-compatible one.
+  Without it you can still `transcribe`, but that's as far as it goes. Only the
+  configured backend is used: no fallback to another, no bundled model, and nothing
+  goes to a cloud service unless you set one up.
 - **Whisper's 99 languages refer to transcription.** Translation has proper
   language names for fourteen; anything else gets passed to the model as a bare
   language code.

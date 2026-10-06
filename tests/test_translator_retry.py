@@ -2,46 +2,47 @@
 
 Locks in two fixes:
   * transport errors are classified via httpx.TransportError — a ReadError
-    (Ollama dying mid-response) used to escape as a raw httpx exception with
+    (a server dying mid-response) used to escape as a raw httpx exception with
     no retry, because the old check matched only "Timeout"/"Connect" in the
     class NAME;
   * a failure record is dropped once the individual retry fixes the segment,
     so translation_failures.json no longer reports failures that were healed.
 
-Fake client only — no live Ollama needed.
+Fake chat backend only — no live server needed.
 """
 
 import json
 
 import httpx
 import pytest
-from ollama import ResponseError
 
-from subtitle_forge.core.translator import SubtitleTranslator, TranslationConfig
+from subtitle_forge.core.chat import ChatRequestError
+from subtitle_forge.core.translator import SubtitleTranslator
+from subtitle_forge.models.config import TranslationConfig
 from subtitle_forge.exceptions import TranslationError
 from subtitle_forge.models.subtitle import SubtitleSegment
 
 
-class _FakeClient:
+class _FakeChat:
     """Yields the scripted outcomes in order: Exception -> raise, str -> reply."""
+
+    model = "qwen2.5:14b"
 
     def __init__(self, outcomes):
         self.outcomes = list(outcomes)
         self.calls = 0
 
-    def chat(self, **kwargs):
+    def chat(self, prompt, *, json_keys=None):
         self.calls += 1
         outcome = self.outcomes.pop(0)
         if isinstance(outcome, Exception):
             raise outcome
-        return {"message": {"content": outcome}}
+        return outcome
 
 
 def _translator(outcomes, **cfg_kwargs):
-    translator = SubtitleTranslator(TranslationConfig(**cfg_kwargs))
-    fake = _FakeClient(outcomes)
-    translator._client = fake
-    return translator, fake
+    fake = _FakeChat(outcomes)
+    return SubtitleTranslator(TranslationConfig(**cfg_kwargs), fake), fake
 
 
 def _segs(*texts):
@@ -75,14 +76,14 @@ def test_read_error_exhausting_retries_raises_translation_error():
 
 
 def test_client_error_is_not_retried():
-    translator, fake = _translator([ResponseError("model not found", 404)])
+    translator, fake = _translator([ChatRequestError("model not found", 404)])
     with pytest.raises(TranslationError):
         translator.translate_batch(_segs("Hello"), "en", "zh")
     assert fake.calls == 1
 
 
 def test_server_error_is_retried():
-    translator, fake = _translator([ResponseError("boom", 500), _good({"1": "你好"})])
+    translator, fake = _translator([ChatRequestError("boom", 500), _good({"1": "你好"})])
     out = translator.translate_batch(_segs("Hello"), "en", "zh")
     assert [s.text for s in out] == ["你好"]
     assert fake.calls == 2

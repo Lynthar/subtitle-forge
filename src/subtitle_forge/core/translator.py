@@ -1,38 +1,28 @@
-"""Translation module using Ollama."""
+"""Subtitle translation through an LLM chat backend."""
 
-from typing import Any, Dict, List, Optional, Callable
-from dataclasses import asdict, dataclass
+from typing import Dict, List, Optional, Callable
 import json
 import re
 import logging
 import time
 
 import httpx
-from ollama import Client, ResponseError
 
-from ..models.config import OllamaConfig
+from ..models.config import AppConfig, TranslationConfig
 from ..models.degradation import TRANSLATION_INCOMPLETE, Degradation
 from ..models.subtitle import SubtitleSegment
 from ..exceptions import TranslationError
-from .model_manager import OllamaModelManager, DownloadProgress
+from .chat import ChatBackend, ChatRequestError, create_chat_backend
 
 logger = logging.getLogger(__name__)
 
 
-@dataclass
-class TranslationConfig(OllamaConfig):
-    """The ollama config section plus the per-run failure-log settings."""
-
-    save_failed_log: bool = False  # Save failed translations to a log file
-    failed_log_path: Optional[str] = None  # Path for failed translations log
-
-
 class SubtitleTranslator:
-    """Subtitle translator using Ollama LLM."""
+    """Subtitle translator over the chat backend translation.backend selects."""
 
-    # Default JSON prompt template, used when no library/custom template is picked — it drives
-    # Ollama's format="json" for reliable parsing. A selected template falls back to the legacy
-    # [N]-line text path (see _is_json_mode / _parse_response).
+    # Default JSON prompt template, used when no library template is picked — the backend
+    # constrains the reply to JSON for reliable parsing. A selected template falls back to the
+    # legacy [N]-line text path (see _is_json_mode / _parse_response).
     DEFAULT_PROMPT_TEMPLATE = """You are a professional subtitle translator. Translate dialogue from {source_lang} into {target_lang}.
 
 GUIDELINES
@@ -111,45 +101,56 @@ Do not include any text outside the JSON object. Do not omit any indices. Do not
 
         return "qwen2.5:7b"  # Fallback to smallest model
 
-    def __init__(self, config: Optional[TranslationConfig] = None):
-        self.config = config or TranslationConfig()
-        self._client: Optional[Client] = None
-        self._model_manager: Optional[OllamaModelManager] = None
+    def __init__(
+        self,
+        settings: TranslationConfig,
+        chat: ChatBackend,
+        *,
+        save_failed_log: bool = False,
+        failed_log_path: Optional[str] = None,
+    ):
+        self.settings = settings
+        self.chat = chat
+        self.save_failed_log = save_failed_log
+        self.failed_log_path = failed_log_path
         self._failed_translations: List[dict] = []  # Track failed translations
         self._batch_failure_indices: dict = {}  # Track failed indices per reason for compressed logging
 
     @classmethod
-    def from_config(cls, cfg: OllamaConfig, **overrides) -> "SubtitleTranslator":
-        """Build a translator from the `ollama` config section. Both prompt fields
-        travel together: dropping prompt_template_id leaves the translator on the
-        default JSON prompt while the config says a library template is selected.
+    def from_config(
+        cls,
+        config: AppConfig,
+        *,
+        save_failed_log: bool = False,
+        failed_log_path: Optional[str] = None,
+    ) -> "SubtitleTranslator":
+        """Build a translator over the chat backend ``config.translation.backend`` names.
 
         Args:
-            cfg: The ollama section of AppConfig.
-            **overrides: Any TranslationConfig field the caller replaces
-                (e.g. save_failed_log / failed_log_path from --save-failed-log).
+            config: The application config.
+            save_failed_log: Write translation failures to ``failed_log_path`` (or a
+                timestamped file in the working directory).
+            failed_log_path: Where that log goes.
 
         Raises:
-            TypeError: An override that is not a TranslationConfig field.
+            ValueError: translation.backend names no known backend.
         """
-        return cls(TranslationConfig(**{**asdict(cfg), **overrides}))
-
-    @property
-    def client(self) -> Client:
-        if self._client is None:
-            timeout = httpx.Timeout(self.config.request_timeout, connect=10.0)
-            self._client = Client(host=self.config.host, timeout=timeout)
-        return self._client
+        return cls(
+            config.translation,
+            create_chat_backend(config),
+            save_failed_log=save_failed_log,
+            failed_log_path=failed_log_path,
+        )
 
     def _is_json_mode(self) -> bool:
         """
         Whether to drive the LLM in JSON mode + parse JSON output.
 
-        We only enable JSON mode for the default prompt — library / custom
-        templates were authored against the legacy [N]-line format and would
-        misbehave under format="json". Decided by the template actually in
-        effect, so a dangling library id that falls back to the default prompt
-        stays in JSON mode.
+        We only enable JSON mode for the default prompt — library templates
+        were authored against the legacy [N]-line format and would misbehave
+        under a JSON constraint. Decided by the template actually in effect,
+        so a dangling library id that falls back to the default prompt stays
+        in JSON mode.
         """
         return self._selected_template() is None
 
@@ -158,100 +159,53 @@ Do not include any text outside the JSON object. Do not omit any indices. Do not
         Cap batch size based on model capability.
 
         Larger batches degrade translation reliability for smaller models
-        (the LLM "forgets" segments mid-batch). Hard cap below the user's
-        configured size for 7B / 14B class models. 32B+ uses the user value.
+        (the LLM "forgets" segments mid-batch). The parameter count is read off
+        the model name ("qwen2.5:14b", "Qwen2.5-14B-Instruct").
         """
-        cfg_max = max(1, self.config.max_batch_size)
-        model = self.config.model.lower()
-        # 32B / 70B / 72B and similarly large — trust user config.
-        if any(tag in model for tag in (":32b", ":34b", ":70b", ":72b", ":110b")):
+        cfg_max = max(1, self.settings.max_batch_size)
+        match = re.search(r"(?<![\d.])(\d+(?:\.\d+)?)b(?![a-z0-9])", self.chat.model.lower())
+        if match is None:
+            # A sizeless name on an OpenAI-compatible server is usually a large cloud model;
+            # on Ollama it is a default tag, typically 8B or smaller.
+            return cfg_max if self.settings.backend == "openai" else min(cfg_max, 4)
+        size = float(match.group(1))
+        if size >= 32:
             return cfg_max
-        # 14B class — clamp to 6.
-        if ":14b" in model or ":13b" in model:
+        if size >= 13:
             return min(cfg_max, 6)
-        # Anything 8B and below — clamp to 4.
         return min(cfg_max, 4)
 
     def effective_batch_size(self) -> int:
         """Public accessor for the model-clamped batch size (for progress UI)."""
         return self._effective_batch_size()
 
-    @property
-    def model_manager(self) -> OllamaModelManager:
-        """Get or create model manager instance."""
-        if self._model_manager is None:
-            self._model_manager = OllamaModelManager(host=self.config.host)
-        return self._model_manager
-
-    def ensure_model_ready(
-        self,
-        progress_callback: Optional[Callable[[DownloadProgress], None]] = None,
-        auto_pull: bool = True,
-    ) -> bool:
-        """
-        Ensure the translation model is ready, optionally downloading it.
-
-        Args:
-            progress_callback: Optional callback for download progress updates.
-            auto_pull: If True, automatically download missing model.
-
-        Returns:
-            True if model is ready to use.
-        """
-        return self.model_manager.ensure_model(
-            self.config.model,
-            progress_callback=progress_callback,
-            auto_pull=auto_pull,
-        )
-
     def check_connection(self) -> bool:
-        """Check if Ollama service is reachable."""
-        return self.model_manager.check_connection()
+        """Whether the backend's server answers."""
+        return self.chat.check_connection()
 
     def check_model_available(self) -> bool:
-        """Check if Ollama model is available."""
-        return self.model_manager.is_model_available(self.config.model)
+        """Whether the server offers the model; raises when it cannot be asked."""
+        return self.chat.check_model_available()
 
     def get_prompt_template(self) -> str:
-        """
-        Get the current prompt template with priority:
-        1. Custom prompt template (direct string)
-        2. Library template by ID
-        3. Default template
-        """
+        """The selected library template, or the default when none is (or it is gone)."""
         selected = self._selected_template()
         if selected is not None:
             return selected
-        if self.config.prompt_template_id:
+        if self.settings.prompt_template_id:
             logger.warning(
-                f"Prompt template '{self.config.prompt_template_id}' not found, using default"
+                f"Prompt template '{self.settings.prompt_template_id}' not found, using default"
             )
         return self.DEFAULT_PROMPT_TEMPLATE
 
     def _selected_template(self) -> Optional[str]:
-        """The custom or library template body in effect; None means the default applies."""
-        # Custom prompt takes precedence (backward compatible)
-        if self.config.prompt_template:
-            return self.config.prompt_template
-        if self.config.prompt_template_id:
+        """The library template body in effect; None means the default applies."""
+        if self.settings.prompt_template_id:
             from .prompt_library import get_prompt_library
 
-            template = get_prompt_library().get_template(self.config.prompt_template_id)
+            template = get_prompt_library().get_template(self.settings.prompt_template_id)
             if template:
                 return template.template
-        return None
-
-    def get_prompt_template_info(self) -> Optional[str]:
-        """
-        Get info about current prompt source.
-
-        Returns:
-            String describing prompt source, or None for default.
-        """
-        if self.config.prompt_template:
-            return "custom"
-        if self.config.prompt_template_id:
-            return f"library:{self.config.prompt_template_id}"
         return None
 
     def _build_translation_prompt(
@@ -343,7 +297,7 @@ FOLLOWING DIALOGUE (for context, DO NOT translate):
 
         # Strategy 1: JSON parsing (the new default path).
         # The LLM may wrap the JSON in markdown fences or add a stray prefix
-        # despite format="json"; pull out the first {...} block and parse it.
+        # despite a JSON constraint; pull out the first {...} block and parse it.
         if not index_to_translation:
             json_blob = self._extract_json_object(response)
             if json_blob is not None:
@@ -526,7 +480,7 @@ FOLLOWING DIALOGUE (for context, DO NOT translate):
         Extract the first balanced JSON object from a response string.
 
         Handles markdown fences (```json ... ```) and stray prefixes like
-        "Here is the translation:" that some models emit despite format="json".
+        "Here is the translation:" that some models emit despite a JSON constraint.
         Returns None if no balanced object is found.
         """
         if not response:
@@ -607,25 +561,14 @@ FOLLOWING DIALOGUE (for context, DO NOT translate):
             context_after=context_after,
         )
 
-        json_mode = self._is_json_mode()
-        chat_kwargs: Dict[str, Any] = {
-            "model": self.config.model,
-            "messages": [{"role": "user", "content": prompt}],
-            "options": {"temperature": self.config.temperature},
-        }
-        if json_mode:
-            # Ollama's structured-output mode — guarantees parseable JSON
-            # whenever the model honours the constraint.
-            chat_kwargs["format"] = "json"
+        # The keys the default prompt lists, so the backend can constrain the reply to them.
+        json_keys = [str(seg.index) for seg in segments] if self._is_json_mode() else None
 
-        for attempt in range(self.config.max_retries):
+        for attempt in range(self.settings.max_retries):
             try:
-                response = self.client.chat(**chat_kwargs)
+                reply = self.chat.chat(prompt, json_keys=json_keys)
 
-                translated = self._parse_translation_response(
-                    response["message"]["content"],
-                    segments,
-                )
+                translated = self._parse_translation_response(reply, segments)
 
                 # Compressed per-batch failure summary at INFO, not WARNING: the individual retry
                 # that runs immediately after usually fixes these. The final WARNING, if any, comes
@@ -664,18 +607,18 @@ FOLLOWING DIALOGUE (for context, DO NOT translate):
 
                 return translated
 
-            except ResponseError as e:
-                # Client errors (bad request, model not found) won't heal on
-                # retry — fail immediately. 5xx / 429 / unknown are worth
-                # retrying: a local Ollama restarting or overloaded recovers.
-                status_code = getattr(e, "status_code", None)
+            except ChatRequestError as e:
+                # Client errors (bad request, model not found, bad key) won't heal on
+                # retry — fail immediately. 5xx / 429 / unknown are worth retrying: a
+                # local server restarting or overloaded recovers.
+                status_code = e.status_code
                 if isinstance(status_code, int) and 400 <= status_code < 500 and status_code != 429:
                     raise TranslationError(f"Translation failed: {e}") from e
                 logger.warning(
                     f"Translation request failed "
-                    f"(attempt {attempt + 1}/{self.config.max_retries}): {e}"
+                    f"(attempt {attempt + 1}/{self.settings.max_retries}): {e}"
                 )
-                if attempt == self.config.max_retries - 1:
+                if attempt == self.settings.max_retries - 1:
                     raise TranslationError(f"Translation failed: {e}") from e
                 time.sleep(min(2**attempt, 8))
             except Exception as e:
@@ -683,11 +626,11 @@ FOLLOWING DIALOGUE (for context, DO NOT translate):
                     raise
                 logger.warning(
                     f"Translation request failed ({type(e).__name__}) "
-                    f"(attempt {attempt + 1}/{self.config.max_retries}): {e}"
+                    f"(attempt {attempt + 1}/{self.settings.max_retries}): {e}"
                 )
-                if attempt == self.config.max_retries - 1:
+                if attempt == self.settings.max_retries - 1:
                     raise TranslationError(
-                        f"Translation failed after {self.config.max_retries} attempts: {e}"
+                        f"Translation failed after {self.settings.max_retries} attempts: {e}"
                     ) from e
                 time.sleep(min(2**attempt, 8))
 
@@ -698,7 +641,7 @@ FOLLOWING DIALOGUE (for context, DO NOT translate):
         """Whether an exception is a transient transport failure worth retrying.
 
         httpx.TransportError covers the whole family — timeouts, connect
-        failures, AND read/write/protocol errors (an Ollama dying mid-response
+        failures, AND read/write/protocol errors (a server dying mid-response
         raises ReadError or RemoteProtocolError). The previous class-NAME
         match on "Timeout"/"Connect" let those escape as raw httpx exceptions
         with no retry at all.
@@ -725,13 +668,7 @@ FOLLOWING DIALOGUE (for context, DO NOT translate):
                     f"Output ONLY the translation, nothing else:\n\n{seg.text}"
                 )
 
-                response = self.client.chat(
-                    model=self.config.model,
-                    messages=[{"role": "user", "content": simple_prompt}],
-                    options={"temperature": self.config.temperature},
-                )
-
-                trans_text = response["message"]["content"].strip()
+                trans_text = self.chat.chat(simple_prompt).strip()
 
                 # Clean up response
                 trans_text = self._clean_translation(trans_text, seg.text)
@@ -789,10 +726,10 @@ FOLLOWING DIALOGUE (for context, DO NOT translate):
         self._batch_failure_indices = {}
 
         batch_size = self._effective_batch_size()
-        if batch_size != self.config.max_batch_size:
+        if batch_size != self.settings.max_batch_size:
             logger.info(
-                f"Auto-clamped translation batch size: {self.config.max_batch_size} -> "
-                f"{batch_size} (model: {self.config.model})"
+                f"Auto-clamped translation batch size: {self.settings.max_batch_size} -> "
+                f"{batch_size} (model: {self.chat.model})"
             )
 
         logger.info(
@@ -833,7 +770,7 @@ FOLLOWING DIALOGUE (for context, DO NOT translate):
             )
 
             # Save failed translations log if enabled
-            if self.config.save_failed_log and self._failed_translations:
+            if self.save_failed_log and self._failed_translations:
                 self._save_failed_log()
         else:
             logger.info(f"Translation complete: {len(translated_segments)} segments")
@@ -847,8 +784,8 @@ FOLLOWING DIALOGUE (for context, DO NOT translate):
         from datetime import datetime
 
         # Determine log path
-        if self.config.failed_log_path:
-            log_path = Path(self.config.failed_log_path)
+        if self.failed_log_path:
+            log_path = Path(self.failed_log_path)
         else:
             log_path = Path.cwd() / f"translation_failures_{datetime.now():%Y%m%d_%H%M%S}.json"
 
@@ -874,7 +811,7 @@ FOLLOWING DIALOGUE (for context, DO NOT translate):
 
             report = {
                 "timestamp": datetime.now().isoformat(),
-                "model": self.config.model,
+                "model": self.chat.model,
                 "total_failures": len(self._failed_translations),
                 "summary": {
                     "model_refusal": len(categorized["model_refusal"]),

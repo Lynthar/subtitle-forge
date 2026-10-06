@@ -62,10 +62,16 @@ def batch_process(
         "--whisper-model",
         help="Whisper model name",
     ),
-    ollama_model: Optional[str] = typer.Option(
+    translation_backend: Optional[str] = typer.Option(
         None,
+        "--translation-backend",
+        help="Translation backend: ollama, openai (default: config translation.backend)",
+    ),
+    translation_model: Optional[str] = typer.Option(
+        None,
+        "--translation-model",
         "--ollama-model",
-        help="Ollama model name",
+        help="Translation model (default: the backend's configured model)",
     ),
     keep_original: Optional[bool] = typer.Option(
         None,
@@ -121,7 +127,7 @@ def batch_process(
         print_task_summary,
         print_warning,
     )
-    from ..app import EXIT_DEGRADED, get_config
+    from ..app import EXIT_DEGRADED, apply_translation_flags, get_config
 
     # get_config() (not a bare AppConfig.load()) so the root --config flag
     # actually reaches this command.
@@ -149,8 +155,7 @@ def batch_process(
     # Override config
     if whisper_model:
         config.whisper.model = whisper_model
-    if ollama_model:
-        config.ollama.model = ollama_model
+    apply_translation_flags(config, translation_backend, translation_model)
     keep_original, bilingual = config.output.resolve_flags(
         keep_original=keep_original, bilingual=bilingual
     )
@@ -236,7 +241,7 @@ def batch_process(
         # Fresh translator per task: it carries per-run failure tracking that
         # workers sharing one instance would clear out from under each other.
         translator = SubtitleTranslator.from_config(
-            config.ollama,
+            config,
             save_failed_log=save_debug_log,
             failed_log_path=failed_log_path,
         )

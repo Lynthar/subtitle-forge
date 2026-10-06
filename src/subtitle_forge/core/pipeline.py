@@ -7,7 +7,7 @@ and gets a quiet, side-effect-free run.
 
 Caller responsibilities:
 - Build the ASR backend with core.asr.create_backend and ensure its model is cached locally.
-- Build the SubtitleTranslator and ensure its Ollama model is available,
+- Build the SubtitleTranslator and ensure its chat backend offers the model,
   unless target_languages is empty (transcribe-only runs pass none).
 - Unload the backend's model when done, if needed (unload_model()).
 

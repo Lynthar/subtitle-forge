@@ -3,6 +3,7 @@
 Skips when ffmpeg-python or faster-whisper is absent, since the patched modules import them."""
 
 from pathlib import Path
+from types import SimpleNamespace
 from typing import ClassVar
 
 import pytest
@@ -46,6 +47,7 @@ class _FakeTranscriber:
 
 class _FakeTranslator:
     LANGUAGE_NAMES: ClassVar[dict] = {}
+    chat = SimpleNamespace(label="Fake", endpoint="fake://", model="fake")
 
     def __init__(self, *args, **kwargs):
         pass

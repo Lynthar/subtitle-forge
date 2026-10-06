@@ -80,12 +80,11 @@ qwen3_asr:
   # HuggingFace mirror (e.g. https://hf-mirror.com); sets HF_ENDPOINT for the whole process
   hf_endpoint: null
 
-ollama:
-  # Ollama model name
-  model: qwen2.5:14b
-
-  # Ollama API address
-  host: http://localhost:11434
+translation:
+  # Translation backend; its connection settings live in the section of the same name below.
+  # Options: ollama, openai (any OpenAI-compatible chat API: LM Studio, llama.cpp,
+  # vLLM, Ollama's /v1, or a cloud service). Only the backend named here is ever used.
+  backend: ollama
 
   # Generation temperature. Translation is deterministic — keep at 0 unless
   # you want to experiment with creative paraphrasing.
@@ -103,11 +102,28 @@ ollama:
   # instead of hanging the whole job.
   request_timeout: 180.0
 
-  # Custom prompt template text (null = the built-in JSON prompt)
-  prompt_template: null
-
-  # Prompt library template id (null = none selected)
+  # Prompt library template id (null = the built-in JSON prompt).
+  # `config set-prompt` stores your own text as the template "custom" and selects it.
   prompt_template_id: null
+
+ollama:
+  # Ollama model name
+  model: qwen2.5:14b
+
+  # Ollama API address
+  host: http://localhost:11434
+
+openai:
+  # Endpoint including the /v1 suffix, e.g. http://localhost:1234/v1 (LM Studio),
+  # http://localhost:8080/v1 (llama.cpp), https://api.openai.com/v1. Required, no default.
+  base_url: ""
+
+  # Model id as the server lists it at <base_url>/models. Required.
+  model: ""
+
+  # API key; local servers usually need none. The SUBTITLE_FORGE_OPENAI_API_KEY
+  # environment variable takes precedence and keeps the key out of this file.
+  api_key: null
 
 output:
   # Output file encoding

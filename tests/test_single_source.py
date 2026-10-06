@@ -1,12 +1,11 @@
 """Things with exactly one home in src/. A second copy — a re-pasted progress block, a
-hand-typed VAD default, a translator config that stops mirroring OllamaConfig — fails here."""
+hand-typed VAD default — fails here."""
 
-import dataclasses
 from pathlib import Path
 
 import pytest
 
-from subtitle_forge.models.config import OllamaConfig, WhisperConfig
+from subtitle_forge.models.config import WhisperConfig
 
 SRC = Path(__file__).resolve().parent.parent / "src" / "subtitle_forge"
 
@@ -32,11 +31,3 @@ def test_vad_defaults_derive_from_whisper_config():
     }
     assert Transcriber.DEFAULT_VAD_PARAMETERS == expected
     assert Transcriber.VAD_PRESETS["default"] is Transcriber.DEFAULT_VAD_PARAMETERS
-
-
-def test_translation_config_carries_every_ollama_field_with_the_same_default():
-    from subtitle_forge.core.translator import TranslationConfig
-
-    ollama = {f.name: f.default for f in dataclasses.fields(OllamaConfig)}
-    translation = {f.name: f.default for f in dataclasses.fields(TranslationConfig)}
-    assert {name: translation.get(name) for name in ollama} == ollama

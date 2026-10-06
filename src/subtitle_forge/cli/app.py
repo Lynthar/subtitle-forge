@@ -7,7 +7,7 @@ import typer
 from rich.console import Console
 
 from .commands import transcribe, translate, batch, config, serve
-from ..models.config import AppConfig
+from ..models.config import TRANSLATION_BACKENDS, AppConfig
 from ..utils.logger import setup_logging
 
 app = typer.Typer(
@@ -59,6 +59,22 @@ def whisper_flags_apply(cfg: AppConfig, flags: Mapping[str, object]) -> bool:
             f"{', '.join(given)}: Whisper-only, ignored under asr.backend {cfg.asr.backend}"
         )
     return False
+
+
+def apply_translation_flags(cfg: AppConfig, backend: Optional[str], model: Optional[str]) -> None:
+    """Put --translation-backend / --translation-model into cfg; exits 1 if that leaves it invalid."""
+    from ..utils.progress import print_error
+
+    if backend:
+        cfg.translation.backend = backend
+    if model and cfg.translation.backend in TRANSLATION_BACKENDS:
+        # Each backend reads the config section of its own name.
+        getattr(cfg, cfg.translation.backend).model = model
+    try:
+        cfg.validate()
+    except ValueError as e:
+        print_error(str(e))
+        raise typer.Exit(1)
 
 
 def prepare_asr_backend(transcriber) -> None:
@@ -173,10 +189,16 @@ def process(
         "--whisper-model",
         help="Whisper model name",
     ),
-    ollama_model: Optional[str] = typer.Option(
+    translation_backend: Optional[str] = typer.Option(
         None,
+        "--translation-backend",
+        help="Translation backend: ollama, openai (default: config translation.backend)",
+    ),
+    translation_model: Optional[str] = typer.Option(
+        None,
+        "--translation-model",
         "--ollama-model",
-        help="Ollama model name",
+        help="Translation model (default: the backend's configured model)",
     ),
     keep_original: Optional[bool] = typer.Option(
         None,
@@ -256,6 +278,7 @@ def process(
         subtitle-forge process video.mp4 -t zh -t ja --bilingual
     """
     from ..core.asr import create_backend
+    from ..core.chat import ChatRequestError, OllamaChat
     from ..core.transcriber import build_vad_parameters
     from ..core.translator import SubtitleTranslator
     from ..utils.progress import (
@@ -274,8 +297,7 @@ def process(
     # Override config if specified
     if whisper_model:
         cfg.whisper.model = whisper_model
-    if ollama_model:
-        cfg.ollama.model = ollama_model
+    apply_translation_flags(cfg, translation_backend, translation_model)
     if prompt_template:
         # Reject an unknown id here, not after the GPU run: it leaves JSON mode
         # off (id is set) while resolving to the default prompt, so the whole
@@ -286,7 +308,7 @@ def process(
             print_error(f"Prompt template not found: {prompt_template}")
             console.print("\n[dim]Use 'config list-prompts' to see available templates[/dim]")
             raise typer.Exit(1)
-        cfg.ollama.prompt_template_id = prompt_template
+        cfg.translation.prompt_template_id = prompt_template
 
     output_dir = output_dir or video.parent
     keep_original, bilingual = cfg.output.resolve_flags(
@@ -345,28 +367,40 @@ def process(
             failed_log_path = None
 
         translator = SubtitleTranslator.from_config(
-            cfg.ollama,
+            cfg,
             save_failed_log=effective_save_failed_log,
             failed_log_path=failed_log_path,
         )
+        chat = translator.chat
 
-        # Same order as `config pull-model`: an unreachable daemon must not read as a
+        # Same order as `config pull-model`: an unreachable server must not read as a
         # missing model, or the user is offered a download that cannot work.
         if not translator.check_connection():
-            print_error(f"Cannot connect to Ollama at {cfg.ollama.host}. Run: ollama serve")
+            hint = " Run: ollama serve" if isinstance(chat, OllamaChat) else ""
+            print_error(f"Cannot connect to {chat.label} at {chat.endpoint}.{hint}")
+            raise typer.Exit(1)
+        try:
+            model_available = translator.check_model_available()
+            offered = [] if model_available else chat.list_models()
+        except ChatRequestError as e:
+            print_error(f"{chat.label} at {chat.endpoint} could not list its models: {e}")
             raise typer.Exit(1)
 
-        # Check and download translation model if needed (separate progress bar)
-        if not translator.check_model_available():
-            print_warning(f"Translation model '{cfg.ollama.model}' not found")
+        # Fail or download here, not after transcription: a GPU run that ends with no
+        # translation model is wasted.
+        if not model_available:
+            if not isinstance(chat, OllamaChat):
+                print_error(
+                    f"Translation model '{chat.model}' is not offered by {chat.endpoint}; "
+                    f"it lists: {', '.join(offered) or 'nothing'}"
+                )
+                raise typer.Exit(1)
+            print_warning(f"Translation model '{chat.model}' not found")
             if typer.confirm("Download model now?", default=True):
-                console.print(f"\n[cyan]Downloading model: {cfg.ollama.model}[/cyan]")
+                console.print(f"\n[cyan]Downloading model: {chat.model}[/cyan]")
                 console.print("[dim]This may take a while for large models...[/dim]\n")
-
-                # Fail here, not after transcription: a GPU run that ends
-                # with no translation model is wasted.
                 try:
-                    pull_ollama_with_progress(translator.model_manager.pull_model(cfg.ollama.model))
+                    pull_ollama_with_progress(chat.model_manager.pull_model(chat.model))
                 except RuntimeError as e:
                     print_error(f"{e}\nRun: subtitle-forge config pull-model")
                     raise typer.Exit(1)

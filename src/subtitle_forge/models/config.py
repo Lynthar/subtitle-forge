@@ -1,16 +1,34 @@
 """Configuration data model."""
 
+import logging
 import os
 import sys
 import tempfile
 from pathlib import Path
 from dataclasses import asdict, dataclass, field, fields, is_dataclass
-from typing import Optional, Tuple
+from typing import List, Optional, Tuple
 
 import yaml
 
 # Backends core.asr.create_backend can build; each one reads the config section of the same name.
 ASR_BACKENDS = ("whisper", "qwen3_asr")
+# Likewise for core.chat.create_chat_backend.
+TRANSLATION_BACKENDS = ("ollama", "openai")
+
+# Read before openai.api_key, so the key never has to be written into the config file. Not
+# OPENAI_API_KEY: that one is meant for api.openai.com and would go to whatever base_url names.
+OPENAI_API_KEY_ENV = "SUBTITLE_FORGE_OPENAI_API_KEY"
+
+# Keys the ollama section held before translation settings became shared by every backend.
+_MOVED_TO_TRANSLATION = (
+    "temperature",
+    "max_batch_size",
+    "max_retries",
+    "request_timeout",
+    "prompt_template_id",
+)
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -80,19 +98,35 @@ class Qwen3AsrConfig:
 
 
 @dataclass
-class OllamaConfig:
-    """Ollama translation configuration."""
+class TranslationConfig:
+    """Translation settings every backend shares; the backend's own section holds the rest."""
 
-    model: str = "qwen2.5:14b"
-    host: str = "http://localhost:11434"
+    backend: str = "ollama"  # One of TRANSLATION_BACKENDS
     # Translation is a deterministic task — temperature=0 dramatically reduces
     # the rate of skipped/renumbered segments compared to 0.3.
     temperature: float = 0.0
     max_batch_size: int = 10
     max_retries: int = 3
     request_timeout: float = 180.0  # Per-request timeout (seconds)
-    prompt_template: Optional[str] = None  # Custom translation prompt (None = use default)
-    prompt_template_id: Optional[str] = None  # Reference to prompt library template
+    prompt_template_id: Optional[str] = None  # Prompt library template (None = built-in prompt)
+
+
+@dataclass
+class OllamaConfig:
+    """Ollama server (translation.backend: ollama)."""
+
+    model: str = "qwen2.5:14b"
+    host: str = "http://localhost:11434"
+
+
+@dataclass
+class OpenAIConfig:
+    """OpenAI-compatible chat API (translation.backend: openai), local or cloud."""
+
+    # No default: an unset URL must fail validation, never reach a cloud service.
+    base_url: str = ""
+    model: str = ""
+    api_key: Optional[str] = None  # OPENAI_API_KEY_ENV overrides it
 
 
 @dataclass
@@ -115,6 +149,35 @@ class OutputConfig:
         )
 
 
+def _migrate_ollama_keys(data: dict) -> List[str]:
+    """Move a pre-translation-section file's ollama keys into ``data``'s translation section.
+
+    Returns the keys moved. A key already set under translation wins. A custom prompt body
+    becomes the user library template ``custom``, as `config set-prompt` now stores one.
+
+    Raises:
+        ValueError: The body cannot be stored without replacing a different ``custom``.
+    """
+    ollama = data.get("ollama") or {}
+    moved = [k for k in (*_MOVED_TO_TRANSLATION, "prompt_template") if k in ollama]
+    if not moved:
+        return []
+    translation = dict(data.get("translation") or {})
+    explicit = set(translation)
+    for key in _MOVED_TO_TRANSLATION:
+        value = ollama.pop(key, None)
+        if key in moved and key not in explicit:
+            translation[key] = value
+    body = ollama.pop("prompt_template", None)
+    if body and "prompt_template_id" not in explicit:
+        from ..core.prompt_library import store_custom_template
+
+        # The body took precedence over a library id, so it still does.
+        translation["prompt_template_id"] = store_custom_template(body, replace=False)
+    data["ollama"], data["translation"] = ollama, translation
+    return moved
+
+
 @dataclass
 class AppConfig:
     """Application configuration."""
@@ -122,7 +185,9 @@ class AppConfig:
     asr: AsrConfig = field(default_factory=AsrConfig)
     whisper: WhisperConfig = field(default_factory=WhisperConfig)
     qwen3_asr: Qwen3AsrConfig = field(default_factory=Qwen3AsrConfig)
+    translation: TranslationConfig = field(default_factory=TranslationConfig)
     ollama: OllamaConfig = field(default_factory=OllamaConfig)
+    openai: OpenAIConfig = field(default_factory=OpenAIConfig)
     output: OutputConfig = field(default_factory=OutputConfig)
     timestamp: TimestampConfig = field(default_factory=TimestampConfig)
     max_workers: int = 2
@@ -153,6 +218,12 @@ class AppConfig:
 
         with open(path, "r", encoding="utf-8") as f:
             data = yaml.safe_load(f) or {}
+        moved = _migrate_ollama_keys(data)
+        if moved:
+            logger.warning(
+                f"{path}: moved {', '.join(f'ollama.{k}' for k in moved)} to the translation "
+                f"section; save the new layout with: subtitle-forge config import {path}"
+            )
 
         kwargs: dict = {}
         for fld in fields(cls):
@@ -176,13 +247,26 @@ class AppConfig:
         def _num(value) -> bool:
             return isinstance(value, (int, float)) and not isinstance(value, bool)
 
-        ts, wh, ol = self.timestamp, self.whisper, self.ollama
+        ts, wh, tr = self.timestamp, self.whisper, self.translation
         errors = []
 
         if self.asr.backend not in ASR_BACKENDS:
             errors.append(
                 f"asr.backend must be one of {'/'.join(ASR_BACKENDS)}, got {self.asr.backend!r}"
             )
+        if tr.backend not in TRANSLATION_BACKENDS:
+            errors.append(
+                f"translation.backend must be one of {'/'.join(TRANSLATION_BACKENDS)}, "
+                f"got {tr.backend!r}"
+            )
+        if tr.backend == "openai":
+            if not self.openai.base_url.startswith(("http://", "https://")):
+                errors.append(
+                    f"openai.base_url must be an http(s) URL such as http://localhost:1234/v1, "
+                    f"got {self.openai.base_url!r}"
+                )
+            if not self.openai.model:
+                errors.append("openai.model must name the model to translate with")
         if ts.mode not in ("off", "minimal", "full"):
             errors.append(f"timestamp.mode must be one of off/minimal/full, got {ts.mode!r}")
         if wh.device not in ("cuda", "cpu", "auto"):
@@ -202,7 +286,7 @@ class AppConfig:
             ("timestamp.max_gap_warning", ts.max_gap_warning),
             ("timestamp.chars_per_second", ts.chars_per_second),
             ("timestamp.cjk_chars_per_second", ts.cjk_chars_per_second),
-            ("ollama.request_timeout", ol.request_timeout),
+            ("translation.request_timeout", tr.request_timeout),
         ]
         non_negative = [
             ("timestamp.min_gap", ts.min_gap),
@@ -210,7 +294,7 @@ class AppConfig:
             ("timestamp.linger_ms", ts.linger_ms),
             ("whisper.speech_pad_ms", wh.speech_pad_ms),
             ("whisper.min_silence_duration_ms", wh.min_silence_duration_ms),
-            ("ollama.temperature", ol.temperature),
+            ("translation.temperature", tr.temperature),
         ]
         # max_retries >= 1 matters: the translator's attempt loop is
         # `range(max_retries)`, so 0 would silently skip translation entirely.
@@ -218,8 +302,8 @@ class AppConfig:
             ("timestamp.split_threshold", ts.split_threshold),
             ("whisper.beam_size", wh.beam_size),
             ("qwen3_asr.batch_size", self.qwen3_asr.batch_size),
-            ("ollama.max_batch_size", ol.max_batch_size),
-            ("ollama.max_retries", ol.max_retries),
+            ("translation.max_batch_size", tr.max_batch_size),
+            ("translation.max_retries", tr.max_retries),
             ("max_workers", self.max_workers),
         ]
         for name, value in positive:

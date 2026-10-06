@@ -1,5 +1,6 @@
 """Configuration management command."""
 
+import os
 from pathlib import Path
 from typing import Optional
 
@@ -8,7 +9,7 @@ from rich.console import Console
 from rich.table import Table
 from rich.panel import Panel
 
-from ...models.config import AppConfig
+from ...models.config import OPENAI_API_KEY_ENV, AppConfig
 from ...utils.gpu import get_gpu_info, check_cuda_available
 from ...utils.progress import (
     print_success,
@@ -50,7 +51,7 @@ def show():
 
     # Secrets never go to the terminal (or the scrollback / screen share it
     # ends up in) — only whether one is set.
-    sensitive_fields = {"hf_token"}
+    sensitive_fields = {"hf_token", "api_key"}
 
     def _display(value, field_name: str = "") -> str:
         if value is None:
@@ -79,6 +80,8 @@ def show():
             table.add_row(section_field.name, _display(value, section_field.name))
 
     console.print(table)
+    if os.environ.get(OPENAI_API_KEY_ENV):
+        console.print(f"\n{OPENAI_API_KEY_ENV} is set and overrides openai.api_key")
     console.print(f"\nConfig file: {_config_file_display()}")
 
 
@@ -98,7 +101,7 @@ def set(
         subtitle-forge config set whisper.model large-v3
         subtitle-forge config set whisper.use_whisperx false
         subtitle-forge config set timestamp.linger_ms 250
-        subtitle-forge config set ollama.request_timeout 600
+        subtitle-forge config set translation.request_timeout 600
         subtitle-forge config set max_workers 4
     """
     import dataclasses
@@ -262,37 +265,42 @@ def check(
         console.print("      Windows: choco install ffmpeg")
         issues.append("ffmpeg not installed")
 
-    # Check Ollama
-    console.print("\n[bold]Ollama Status:[/bold]")
+    # Check the configured translation backend
+    console.print(f"\n[bold]Translation ({config.translation.backend}):[/bold]")
     try:
-        from ...core.model_manager import OllamaModelManager
+        from ...core.chat import OllamaChat, create_chat_backend
 
-        manager = OllamaModelManager(host=config.ollama.host)
+        chat = create_chat_backend(config)
+        is_ollama = isinstance(chat, OllamaChat)
 
-        if manager.check_connection():
+        if chat.check_connection():
             console.print("  [green]Connection:[/green] OK")
-            console.print(f"    Host: {config.ollama.host}")
+            console.print(f"    Endpoint: {chat.endpoint}")
 
+            available_models = chat.list_models()
             if verbose:
-                available_models = manager.list_models()
                 console.print(
                     f"    Available models: {', '.join(available_models) if available_models else 'None'}"
                 )
 
-            # Check configured model
-            if manager.is_model_available(config.ollama.model):
-                console.print(f"  [green]Model:[/green] {config.ollama.model} (ready)")
-            else:
-                console.print(f"  [yellow]Model:[/yellow] {config.ollama.model} (not downloaded)")
+            if chat.check_model_available():
+                console.print(f"  [green]Model:[/green] {chat.model} (ready)")
+            elif is_ollama:
+                console.print(f"  [yellow]Model:[/yellow] {chat.model} (not downloaded)")
                 console.print(
                     "    [yellow]Download with:[/yellow] subtitle-forge config pull-model"
                 )
-                issues.append(f"Translation model '{config.ollama.model}' not downloaded")
+                issues.append(f"Translation model '{chat.model}' not downloaded")
+            else:
+                console.print(f"  [yellow]Model:[/yellow] {chat.model} (not offered)")
+                console.print(f"    Offered: {', '.join(available_models) or 'nothing'}")
+                issues.append(f"Translation model '{chat.model}' not offered by {chat.endpoint}")
         else:
             console.print("  [red]Connection:[/red] Failed")
-            console.print(f"    Cannot connect to {config.ollama.host}")
-            console.print("    [yellow]Start Ollama with:[/yellow] ollama serve")
-            issues.append("Cannot connect to Ollama")
+            console.print(f"    Cannot connect to {chat.endpoint}")
+            if is_ollama:
+                console.print("    [yellow]Start Ollama with:[/yellow] ollama serve")
+            issues.append(f"Cannot connect to {chat.label}")
 
     except Exception as e:
         console.print(f"  [red]Error:[/red] {e}")
@@ -300,14 +308,14 @@ def check(
             import traceback
 
             console.print(f"    [dim]{traceback.format_exc()}[/dim]")
-        issues.append(f"Ollama error: {e}")
+        issues.append(f"Translation backend error: {e}")
 
     # Configuration summary
     if verbose:
         console.print("\n[bold]Current Configuration:[/bold]")
         console.print(f"  Whisper Model: {config.whisper.model}")
         console.print(f"  Whisper Device: {config.whisper.device}")
-        console.print(f"  Ollama Model: {config.ollama.model}")
+        console.print(f"  Translation Backend: {config.translation.backend}")
         console.print(f"  Max Workers: {config.max_workers}")
         console.print(f"  Config Path: {_config_file_display()}")
 
@@ -414,6 +422,12 @@ def pull_model(
     from ...core.model_manager import OllamaModelManager
 
     config = _load_config()
+    if config.translation.backend != "ollama":
+        print_error(
+            f"pull-model downloads Ollama models; translation.backend is "
+            f"{config.translation.backend}, whose server manages its own models"
+        )
+        raise typer.Exit(1)
     target_model = model or config.ollama.model
 
     console.print(
@@ -472,18 +486,15 @@ def show_prompt():
     from ...core.translator import SubtitleTranslator
 
     config = _load_config()
-    translator = SubtitleTranslator.from_config(config.ollama)
-    prompt = translator.get_prompt_template()
-    source = translator.get_prompt_template_info()
+    prompt = SubtitleTranslator.from_config(config).get_prompt_template()
+    template_id = config.translation.prompt_template_id
 
     # A dangling template id resolves to the default, so label what is
     # actually shown rather than what the config asked for.
-    if source is None or prompt == translator.DEFAULT_PROMPT_TEMPLATE:
+    if template_id is None or prompt == SubtitleTranslator.DEFAULT_PROMPT_TEMPLATE:
         header, border = "[dim](Using default prompt)[/dim]", "blue"
-    elif source == "custom":
-        header, border = "[cyan]Custom Prompt Template[/cyan]", "cyan"
     else:
-        header, border = f"[cyan]{source}[/cyan]", "cyan"
+        header, border = f"[cyan]library:{template_id}[/cyan]", "cyan"
 
     console.print(
         Panel(
@@ -514,7 +525,8 @@ def set_prompt(
     """
     Set custom translation prompt from a file.
 
-    The prompt file should contain the template with placeholders.
+    Saves it as the user library template "custom" (replacing an earlier one) and
+    selects it. The prompt file should contain the template with placeholders.
 
     Available placeholders:
       {source_lang}    - Source language name
@@ -544,9 +556,10 @@ def set_prompt(
         console.print("  {segments}    - Lines to translate")
         raise typer.Exit(1)
 
-    # Save to config
+    from ...core.prompt_library import store_custom_template
+
     config = _load_config()
-    config.ollama.prompt_template = prompt_content
+    config.translation.prompt_template_id = store_custom_template(prompt_content, replace=True)
     config.save(_active_config_path())
 
     print_success(f"Custom prompt loaded from: {file}")
@@ -558,19 +571,15 @@ def reset_prompt():
     """
     Reset translation prompt to default.
 
-    Removes any custom prompt and reverts to the built-in default.
+    Deselects any library or custom template and reverts to the built-in default.
 
     Example:
         subtitle-forge config reset-prompt
     """
     config = _load_config()
 
-    # Both fields, not just the custom one: after `config use-prompt <id>` the
-    # custom prompt is already None, so clearing it alone left the library
-    # template selected while reporting a reset.
-    if config.ollama.prompt_template or config.ollama.prompt_template_id:
-        config.ollama.prompt_template = None
-        config.ollama.prompt_template_id = None
+    if config.translation.prompt_template_id:
+        config.translation.prompt_template_id = None
         config.save(_active_config_path())
         print_success("Translation prompt reset to default")
     else:
@@ -597,7 +606,7 @@ def export_prompt(
     from ...core.translator import SubtitleTranslator
 
     config = _load_config()
-    prompt = SubtitleTranslator.from_config(config.ollama).get_prompt_template()
+    prompt = SubtitleTranslator.from_config(config).get_prompt_template()
 
     try:
         output.write_text(prompt, encoding="utf-8")
@@ -723,9 +732,7 @@ def use_prompt(
         raise typer.Exit(1)
 
     config = _load_config()
-    # Clear custom prompt if set, use library template
-    config.ollama.prompt_template = None
-    config.ollama.prompt_template_id = template_id
+    config.translation.prompt_template_id = template_id
     config.save(_active_config_path())
 
     print_success(f"Now using prompt template: {template.name}")
@@ -854,8 +861,8 @@ def delete_prompt(
 
         # Clear from config if it was the active template
         config = _load_config()
-        if config.ollama.prompt_template_id == template_id:
-            config.ollama.prompt_template_id = None
+        if config.translation.prompt_template_id == template_id:
+            config.translation.prompt_template_id = None
             config.save(_active_config_path())
             console.print("[dim]Switched to default prompt template[/dim]")
     else:

@@ -12,6 +12,7 @@
    - [GPU 加速设置](#gpu-加速设置)
    - [HuggingFace 镜像](#huggingface-镜像中国用户)
    - [硬件与模型推荐](#硬件与模型推荐)
+   - [翻译后端](#翻译后端)
    - [更新方法](#更新方法)
 2. [基本使用](#二基本使用)
    - [快速开始](#快速开始)
@@ -289,6 +290,49 @@ subtitle-forge config set ollama.model qwen2.5:14b
 
 ---
 
+## 翻译后端
+
+默认用 Ollama 翻译。`translation.backend` 选后端，后端自己的连接设置写在同名的一节里；
+温度、批量、重试、超时和提示词是各后端共用的，放在 `translation` 节，换后端不用重配。
+
+| 后端 | `translation.backend` | 适用 |
+|------|----------------------|------|
+| Ollama 原生接口 | `ollama`（默认） | 本机或局域网里的 Ollama |
+| OpenAI 兼容接口 | `openai` | LM Studio、llama.cpp（`llama-server`）、vLLM、Ollama 的 `/v1`，或云端 API |
+
+**只会用你选中的那一个。** 它连不上或者没有配置的模型时，`process` 在转录之前就报错退出
+（退出码 1），不会改用别的后端，更不会转去云端。
+
+### OpenAI 兼容接口
+
+```bash
+subtitle-forge config set translation.backend openai
+subtitle-forge config set openai.base_url http://localhost:1234/v1
+subtitle-forge config set openai.model qwen2.5-14b-instruct
+subtitle-forge config check --verbose
+```
+
+- `base_url` 要带 `/v1`。常见的地址：LM Studio `http://localhost:1234/v1`，llama.cpp
+  `http://localhost:8080/v1`，vLLM `http://localhost:8000/v1`，Ollama `http://localhost:11434/v1`。
+  它没有默认值，不填就会报错。
+- `model` 填服务端在 `<base_url>/models` 里列出的 id，`config check --verbose` 会把它们列出来。
+  llama.cpp 列的是启动时的 `--alias`，没设就是模型文件名。
+- **API key**：本地服务一般用不着。需要时设环境变量 `SUBTITLE_FORGE_OPENAI_API_KEY`（优先），
+  或者 `config set openai.api_key <key>`，后者会把 key 明文写进配置文件，`config show` 只显示「已设置」。
+  通用的 `OPENAI_API_KEY` 不读，免得把给 OpenAI 的 key 发到别的地址。
+- 用默认提示词时，会请服务端按 JSON Schema 约束输出，每条字幕都是必填项。服务端不接受就退到
+  `json_object`，还不接受就不加约束、靠解析兜底。LM Studio 只认前一种，DeepSeek 只认后一种，两边都能用。
+- 批量大小按模型名里的参数量自动收紧：32B 及以上用配置值，13B 到 32B 之间最多 6，再小最多 4。
+  名字里看不出参数量的（比如 `gpt-4o-mini`），按云端大模型对待，直接用配置值。
+- OpenAI 的推理模型（o 系列、GPT-5）不接受 `temperature: 0`，请求会被 400 拒掉，请换用非推理模型。
+- `config pull-model` 只管 Ollama。其他服务的模型，在它们自己那边下载和加载。
+
+后端指向云端时，字幕文本会发给那家服务，见[隐私与网络边界](#五隐私与网络边界)第 2 条。
+`process`、`batch` 和 `translate` 都可以临时用 `--translation-backend` 换后端，
+`process` 和 `batch` 用 `--translation-model` 换模型（`translate` 用 `-m`）。
+
+---
+
 ## 更新方法
 
 ```bash
@@ -470,12 +514,16 @@ whisper:
   use_whisperx: true             # 用 wav2vec2 做强制对齐
   whisperx_align: true
 
-ollama:
-  model: qwen2.5:14b             # 翻译模型
-  host: http://localhost:11434
+translation:
+  backend: ollama                # 翻译后端：ollama 或 openai，连接设置写在同名的一节里
   temperature: 0.0               # 翻译用 0；之前是 0.3 容易丢段
   max_batch_size: 10             # 上限值；实际会按模型自适应：14B→6, ≤8B→4
   request_timeout: 180.0         # 单次请求超时（秒）
+  prompt_template_id: null       # 提示词模板 id；null 为内置提示词
+
+ollama:
+  model: qwen2.5:14b             # 翻译模型
+  host: http://localhost:11434
 
 output:
   encoding: utf-8
@@ -487,6 +535,11 @@ log_level: INFO
 ```
 
 完整字段说明详见仓库内的 `config/default.yaml`。
+
+早先版本把 `temperature`、`max_batch_size`、`max_retries`、`request_timeout` 和提示词都写在
+`ollama` 节里。这样的配置文件照样能读，读取时会给出提示；用
+`subtitle-forge config import <配置文件路径>` 可以按新格式写回。旧的自定义提示词正文会存成
+用户模板 `custom`，并且仍是选中状态。
 
 ---
 
@@ -507,7 +560,8 @@ subtitle-forge process <video> -t <target_lang> [options]
 | `--source-lang` | `-s` | 源语言（默认自动检测） |
 | `--output-dir` | `-o` | 输出目录（默认视频所在目录） |
 | `--whisper-model` | - | 指定 Whisper 模型 |
-| `--ollama-model` | - | 指定翻译模型 |
+| `--translation-backend` | - | 翻译后端：ollama, openai（默认取配置） |
+| `--translation-model` | - | 指定翻译模型（旧名 `--ollama-model` 仍可用） |
 | `--keep-original / --no-keep-original` | - | 是否同时保存原语言字幕（默认保留）|
 | `--bilingual` | - | 生成双语字幕（原文上译文下） |
 | `--whisperx / --no-whisperx` | - | 使用/不使用 WhisperX |
@@ -529,7 +583,7 @@ subtitle-forge process <video> -t <target_lang> [options]
 subtitle-forge process movie.mp4 -t zh
 
 # 高质量处理
-subtitle-forge process movie.mp4 -t zh --whisper-model large-v3 --ollama-model qwen2.5:32b
+subtitle-forge process movie.mp4 -t zh --whisper-model large-v3 --translation-model qwen2.5:32b
 
 # 使用动漫提示词模板
 subtitle-forge process anime.mp4 -t zh -p anime
@@ -557,7 +611,8 @@ subtitle-forge batch <directory> -t <target_lang> [options]
 | `--file-list` | - | 从文件列表读取 |
 | `--output-dir` | `-o` | 输出目录 |
 | `--whisper-model` | - | Whisper 模型 |
-| `--ollama-model` | - | Ollama 模型 |
+| `--translation-backend` | - | 翻译后端：ollama, openai |
+| `--translation-model` | - | 翻译模型（旧名 `--ollama-model` 仍可用） |
 | `--keep-original / --no-keep-original` | - | 保留/不保留原语言字幕 |
 | `--bilingual / --no-bilingual` | - | 生成双语字幕 |
 | `--timestamp-mode` | - | 后处理模式 |
@@ -631,6 +686,8 @@ subtitle-forge translate <subtitle> -t <target_lang> [options]
 | `--target-lang` | `-t` | 目标语言（必需） |
 | `--source-lang` | `-s` | 源语言 |
 | `--output` | `-o` | 输出文件路径 |
+| `--translation-backend` | - | 翻译后端：ollama, openai |
+| `--model` | `-m` | 翻译模型 |
 | `--bilingual / --no-bilingual` | - | 生成双语字幕（默认取配置 `output.bilingual`） |
 
 **示例**：
@@ -655,12 +712,12 @@ subtitle-forge translate video.en.srt -t zh --bilingual
 | `set <key> <value>` | 设置配置项 |
 | `reset` | 重置为默认配置 |
 | `check` | 检查系统环境 |
-| `pull-model` | 下载翻译模型 |
+| `pull-model` | 下载翻译模型（仅 Ollama） |
 | `show-prompt` | 显示当前翻译提示词 |
 | `list-prompts` | 列出可用提示词模板 |
 | `use-prompt <id>` | 使用指定模板 |
 | `export-prompt` | 导出提示词 |
-| `set-prompt` | 设置自定义提示词 |
+| `set-prompt` | 设置自定义提示词（存为模板 `custom` 并选中） |
 | `reset-prompt` | 重置为默认提示词 |
 
 **示例**：
@@ -843,7 +900,8 @@ WantedBy=multi-user.target
 
 # 五、隐私与网络边界
 
-本项目的推理全部在本机完成：**转录和翻译过程不会把音频或字幕发到任何云服务**。
+默认配置下推理全部在本机完成：**转录和翻译不会把音频或字幕发到任何云服务**。
+只有你把翻译后端配成云端服务，字幕文本才会发出去（第 2 条）。
 但"本地优先"不等于"永不联网"，下面四条边界值得先看清楚，尤其是要处理敏感内容的时候。
 
 ## 四条边界
@@ -861,18 +919,23 @@ WantedBy=multi-user.target
 中国大陆用户可用镜像替代官方源，见 [HuggingFace 镜像](#huggingface-镜像中国用户)。
 缓存位置可以用 `whisper.download_root` 配置项或 `HF_HOME` 环境变量改。
 
-### 2. Ollama 地址可以指向远程机器
+### 2. 翻译可以发往别的机器
 
 `ollama.host` 默认是 `http://localhost:11434`，此时翻译请求不出本机。
-但这个配置项接受任意地址：
+但翻译后端的地址接受任意值：
 
 ```bash
 # 一旦改成远程地址，字幕原文和译文都会发送到那台机器
 subtitle-forge config set ollama.host http://192.168.1.100:11434
+
+# OpenAI 兼容后端：openai.base_url 指向哪里，字幕就发到哪里，云端服务也一样
+subtitle-forge config set translation.backend openai
 ```
 
-把翻译放到局域网里的另一台强机上是合理用法，**但要清楚字幕内容离开了本机**。
-处理敏感内容前，用 `subtitle-forge config show` 确认这一项指向哪里。
+把翻译放到局域网里的另一台强机上、或者交给云端 API，都是合理用法，**但要清楚字幕内容离开了本机**。
+请求只发给 `translation.backend` 选中的那一个后端，没有配置云端就绝不会外发；发出去的只有
+字幕文本和提示词，不含音频和视频。处理敏感内容前，用 `subtitle-forge config show` 确认
+`translation.backend` 和对应那一节的地址。
 
 ### 3. 调试日志会记录台词原文
 
@@ -947,10 +1010,10 @@ export HF_HUB_DISABLE_TELEMETRY=1
 subtitle-forge config check --verbose
 ```
 
-Whisper 和 Ollama 两项都显示 ready，就说明离线环境是完整的。
+语音识别和翻译两项都显示 ready，就说明离线环境是完整的。
 此时整条流水线（ffmpeg 抽音频 → 转录 → 翻译 → 写 SRT）不需要任何外部网络。
 
-> **注意**：`ollama.host` 必须是本机地址，否则第 2 条边界依然成立——
+> **注意**：翻译后端的地址（`ollama.host` 或 `openai.base_url`）必须是本机地址，否则第 2 条边界依然成立——
 > 离线机器上指向局域网另一台机器，字幕一样会离开这台电脑。
 
 ---
@@ -1137,7 +1200,7 @@ subtitle-forge process video.mp4 -t zh --save-debug-log
 如果某个特殊模型还是丢段：
 
 ```bash
-subtitle-forge config set ollama.max_batch_size 3
+subtitle-forge config set translation.max_batch_size 3
 ```
 
 ### 第三步：换更大模型
@@ -1336,7 +1399,7 @@ subtitle-forge config export-prompt -o my_prompt.txt
 
 # 2. 编辑文件
 
-# 3. 应用自定义提示词
+# 3. 应用自定义提示词（存为用户模板 custom 并选中，再执行一次会覆盖它）
 subtitle-forge config set-prompt -f my_prompt.txt
 
 # 4. 重置为默认

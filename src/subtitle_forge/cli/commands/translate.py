@@ -27,11 +27,16 @@ def translate_subtitle(
         "-o",
         help="Output SRT file path",
     ),
+    translation_backend: Optional[str] = typer.Option(
+        None,
+        "--translation-backend",
+        help="Translation backend: ollama, openai (default: config translation.backend)",
+    ),
     model: Optional[str] = typer.Option(
         None,
         "--model",
         "-m",
-        help="Ollama model name",
+        help="Translation model (default: the backend's configured model)",
     ),
     bilingual: Optional[bool] = typer.Option(
         None,
@@ -49,11 +54,12 @@ def translate_subtitle(
     from ...core.translator import SubtitleTranslator
     from ...core.subtitle import SubtitleProcessor, validate_language_codes
     from ...utils.progress import SubtitleProgress, print_success, print_error, print_info
-    from ..app import EXIT_DEGRADED, get_config
+    from ..app import EXIT_DEGRADED, apply_translation_flags, get_config
 
     # get_config() (not a bare AppConfig.load()) so the root --config flag
     # actually reaches this command.
     config = get_config()
+    apply_translation_flags(config, translation_backend, model)
 
     try:
         validate_language_codes([target_lang])
@@ -111,9 +117,7 @@ def translate_subtitle(
 
             # 2. Translate
             tracker.set_description("Translating...")
-            translator = SubtitleTranslator.from_config(
-                config.ollama, model=model or config.ollama.model
-            )
+            translator = SubtitleTranslator.from_config(config)
 
             translated = translator.translate(segments, source_lang, target_lang)
             untranslated = translator.untranslated_degradation(target_lang, len(segments))

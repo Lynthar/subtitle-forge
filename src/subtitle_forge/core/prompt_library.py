@@ -16,6 +16,9 @@ logger = logging.getLogger(__name__)
 # (or delete) JSON outside the templates directory.
 _TEMPLATE_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$")
 
+# The user template `config set-prompt` writes and selects.
+CUSTOM_TEMPLATE_ID = "custom"
+
 
 def _validate_template_id(template_id: str) -> None:
     """Raises ValueError if the id is not a safe single filename token."""
@@ -453,3 +456,34 @@ def get_prompt_library() -> PromptLibrary:
     if _library is None:
         _library = PromptLibrary()
     return _library
+
+
+def store_custom_template(body: str, *, replace: bool) -> str:
+    """Save ``body`` as the user template `config set-prompt` selects, and return its id.
+
+    Raises:
+        ValueError: ``body`` lacks a required placeholder, or ``replace`` is False and the
+            library already holds a different template under that id.
+    """
+    library = get_prompt_library()
+    existing = library.get_template(CUSTOM_TEMPLATE_ID)
+    if existing is not None and existing.template == body:
+        return CUSTOM_TEMPLATE_ID
+    if existing is not None and not replace:
+        raise ValueError(
+            f"The config file holds a custom prompt (ollama.prompt_template), and the prompt "
+            f"library already has a different '{CUSTOM_TEMPLATE_ID}' template. Save the "
+            f"config's prompt with `config save-prompt` under another id, then delete "
+            f"ollama.prompt_template from the config file."
+        )
+    library.save_user_template(
+        PromptTemplate(
+            id=CUSTOM_TEMPLATE_ID,
+            name="Custom",
+            description="Set with config set-prompt",
+            template=body,
+            genre="custom",
+            author="user",
+        )
+    )
+    return CUSTOM_TEMPLATE_ID

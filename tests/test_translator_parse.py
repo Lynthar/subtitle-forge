@@ -2,14 +2,18 @@
 
 Counting parsed entries is not enough: a reply renumbered from 1 has the right count, wrong keys."""
 
-from subtitle_forge.core.translator import SubtitleTranslator, TranslationConfig
+from types import SimpleNamespace
+
+from subtitle_forge.core.translator import SubtitleTranslator
+from subtitle_forge.models.config import TranslationConfig
 from subtitle_forge.models.subtitle import SubtitleSegment
+
+# These tests never send a request.
+_NO_CHAT = SimpleNamespace(model="qwen2.5:14b")
 
 
 def _legacy_mode_translator():
-    return SubtitleTranslator(
-        TranslationConfig(prompt_template="{source_lang}{target_lang}{segments}")
-    )
+    return SubtitleTranslator(TranslationConfig(prompt_template_id="movie-general"), _NO_CHAT)
 
 
 def _segments(*indices):

@@ -74,7 +74,7 @@ def make_processor(config: AppConfig, holder: TranscriberHolder):
 def _run_job(job: Job, config: AppConfig, transcriber: AsrBackend) -> list:
     video_path = Path(job.video_path)
 
-    translator = SubtitleTranslator.from_config(config.ollama)
+    translator = SubtitleTranslator.from_config(config)
 
     try:
         result = run_pipeline(
