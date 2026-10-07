@@ -16,7 +16,7 @@ import json
 import httpx
 import pytest
 
-from subtitle_forge.core.chat import ChatRequestError
+from subtitle_forge.core.service import ServiceError
 from subtitle_forge.core.translator import SubtitleTranslator
 from subtitle_forge.models.config import TranslationConfig
 from subtitle_forge.exceptions import TranslationError
@@ -54,7 +54,7 @@ def _segs(*texts):
 
 @pytest.fixture(autouse=True)
 def _no_sleep(monkeypatch):
-    monkeypatch.setattr("subtitle_forge.core.translator.time.sleep", lambda s: None)
+    monkeypatch.setattr("subtitle_forge.core.service.time.sleep", lambda s: None)
 
 
 def _good(indices_to_text):
@@ -76,14 +76,14 @@ def test_read_error_exhausting_retries_raises_translation_error():
 
 
 def test_client_error_is_not_retried():
-    translator, fake = _translator([ChatRequestError("model not found", 404)])
+    translator, fake = _translator([ServiceError("model not found", 404)])
     with pytest.raises(TranslationError):
         translator.translate_batch(_segs("Hello"), "en", "zh")
     assert fake.calls == 1
 
 
 def test_server_error_is_retried():
-    translator, fake = _translator([ChatRequestError("boom", 500), _good({"1": "你好"})])
+    translator, fake = _translator([ServiceError("boom", 500), _good({"1": "你好"})])
     out = translator.translate_batch(_segs("Hello"), "en", "zh")
     assert [s.text for s in out] == ["你好"]
     assert fake.calls == 2

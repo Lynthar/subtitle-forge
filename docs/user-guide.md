@@ -293,22 +293,34 @@ subtitle-forge config set ollama.model qwen2.5:14b
 ## 翻译后端
 
 默认用 Ollama 翻译。`translation.backend` 选后端，后端自己的连接设置写在同名的一节里；
-温度、批量、重试、超时和提示词是各后端共用的，放在 `translation` 节，换后端不用重配。
+重试次数与超时放在 `translation` 节，各后端共用，换后端不用重配。
 
-| 后端 | `translation.backend` | 适用 |
-|------|----------------------|------|
-| Ollama 原生接口 | `ollama`（默认） | 本机或局域网里的 Ollama |
-| OpenAI 兼容接口 | `openai` | LM Studio、llama.cpp（`llama-server`）、vLLM、Ollama 的 `/v1`，或云端 API |
+后端分两类，翻译方式不同：
 
-**只会用你选中的那一个。** 它连不上或者没有配置的模型时，`process` 在转录之前就报错退出
-（退出码 1），不会改用别的后端，更不会转去云端。
+| 后端 | `translation.backend` | 类别 | 适用 |
+|------|----------------------|------|------|
+| Ollama 原生接口 | `ollama`（默认） | 大模型 | 本机或局域网里的 Ollama |
+| OpenAI 兼容接口 | `openai` | 大模型 | LM Studio、llama.cpp（`llama-server`）、vLLM、Ollama 的 `/v1`，或云端 API |
+| DeepL | `deepl` | 机器翻译 | DeepL API（Free 或 Pro） |
+| Google | `google` | 机器翻译 | Google Cloud Translation Basic（v2） |
+
+- **大模型**照提示词翻：吃 `translation` 节里的 `temperature`、`max_batch_size` 和提示词模板，
+  按模型大小收窄批量，漏句会逐条重试。
+- **机器翻译**一批字幕作为一组文本发出，逐条对应返回：提示词模板、`temperature`、`max_batch_size`
+  对它们不起作用（`--prompt-template` 会提示「已忽略」），也不做逐条重试——同样的原文，
+  引擎每次给的结果一样。
+
+**只会用你选中的那一个。** 它连不上、没有配置的模型或 API key 被拒时，`process` 在转录之前就报错退出
+（退出码 1），不会改用别的后端，更不会转去云端。没设 API key 时，所有命令在动手之前就会报错。
 
 ### OpenAI 兼容接口
 
+先填地址和模型，再切后端——`translation.backend` 设成 `openai` 时这两项必须已经有值，否则配置不予保存：
+
 ```bash
-subtitle-forge config set translation.backend openai
 subtitle-forge config set openai.base_url http://localhost:1234/v1
 subtitle-forge config set openai.model qwen2.5-14b-instruct
+subtitle-forge config set translation.backend openai
 subtitle-forge config check --verbose
 ```
 
@@ -327,9 +339,28 @@ subtitle-forge config check --verbose
 - OpenAI 的推理模型（o 系列、GPT-5）不接受 `temperature: 0`，请求会被 400 拒掉，请换用非推理模型。
 - `config pull-model` 只管 Ollama。其他服务的模型，在它们自己那边下载和加载。
 
+### DeepL 与 Google
+
+```bash
+export SUBTITLE_FORGE_DEEPL_API_KEY=<你的 key>     # 或 SUBTITLE_FORGE_GOOGLE_API_KEY
+subtitle-forge config set translation.backend deepl # 或 google
+subtitle-forge config check
+```
+
+- key 也可以 `config set deepl.api_key <key>` / `config set google.api_key <key>` 写进配置文件，
+  环境变量优先。`config check` 会实际请求一次（DeepL 查额度、Google 查语言列表），确认 key 被接受，不发字幕。
+- **DeepL**：key 以 `:fx` 结尾的是 Free 版，自动走 `api-free.deepl.com`，否则走 Pro 的 `api.deepl.com`。
+  每批最多 50 条；这一批连同前后各 3 条原文作为 `context` 一起发出，帮引擎理解上下文，DeepL 不对它计费。
+  目标语言用带变体的代码：中文 `ZH-HANS` / `ZH-HANT`，英语 `EN-US`，葡萄牙语 `PT-BR`。
+- **Google**：Cloud Translation Basic（v2），用 API key 认证，key 放在请求头里、不进 URL。
+  每批最多 128 条；v2 没有上下文参数，每条独立翻译。中文目标 `zh` 发成 `zh-CN`。
+- **额度用尽或 key 被拒**（DeepL 456 / 403，Google 403 / 400）**整次失败**，那个语言不写半翻的字幕；
+  429 限流会退避重试，次数取 `translation.max_retries`。
+- 某条返回空译文时保留原文，结果里记一条 `translation_incomplete` 降级（退出码 3）。
+
 后端指向云端时，字幕文本会发给那家服务，见[隐私与网络边界](#五隐私与网络边界)第 2 条。
 `process`、`batch` 和 `translate` 都可以临时用 `--translation-backend` 换后端，
-`process` 和 `batch` 用 `--translation-model` 换模型（`translate` 用 `-m`）。
+`process` 和 `batch` 用 `--translation-model` 换模型（`translate` 用 `-m`；机器翻译后端没有模型可换）。
 
 ---
 
@@ -515,10 +546,11 @@ whisper:
   whisperx_align: true
 
 translation:
-  backend: ollama                # 翻译后端：ollama 或 openai，连接设置写在同名的一节里
+  backend: ollama                # 翻译后端：ollama、openai、deepl、google，设置写在同名的一节里
+  request_timeout: 180.0         # 单次请求超时（秒）
+  # 以下三项只对大模型后端（ollama、openai）有效
   temperature: 0.0               # 翻译用 0；之前是 0.3 容易丢段
   max_batch_size: 10             # 上限值；实际会按模型自适应：14B→6, ≤8B→4
-  request_timeout: 180.0         # 单次请求超时（秒）
   prompt_template_id: null       # 提示词模板 id；null 为内置提示词
 
 ollama:
@@ -560,7 +592,7 @@ subtitle-forge process <video> -t <target_lang> [options]
 | `--source-lang` | `-s` | 源语言（默认自动检测） |
 | `--output-dir` | `-o` | 输出目录（默认视频所在目录） |
 | `--whisper-model` | - | 指定 Whisper 模型 |
-| `--translation-backend` | - | 翻译后端：ollama, openai（默认取配置） |
+| `--translation-backend` | - | 翻译后端：ollama, openai, deepl, google（默认取配置） |
 | `--translation-model` | - | 指定翻译模型（旧名 `--ollama-model` 仍可用） |
 | `--keep-original / --no-keep-original` | - | 是否同时保存原语言字幕（默认保留）|
 | `--bilingual` | - | 生成双语字幕（原文上译文下） |
@@ -611,7 +643,7 @@ subtitle-forge batch <directory> -t <target_lang> [options]
 | `--file-list` | - | 从文件列表读取 |
 | `--output-dir` | `-o` | 输出目录 |
 | `--whisper-model` | - | Whisper 模型 |
-| `--translation-backend` | - | 翻译后端：ollama, openai |
+| `--translation-backend` | - | 翻译后端：ollama, openai, deepl, google |
 | `--translation-model` | - | 翻译模型（旧名 `--ollama-model` 仍可用） |
 | `--keep-original / --no-keep-original` | - | 保留/不保留原语言字幕 |
 | `--bilingual / --no-bilingual` | - | 生成双语字幕 |
@@ -686,7 +718,7 @@ subtitle-forge translate <subtitle> -t <target_lang> [options]
 | `--target-lang` | `-t` | 目标语言（必需） |
 | `--source-lang` | `-s` | 源语言 |
 | `--output` | `-o` | 输出文件路径 |
-| `--translation-backend` | - | 翻译后端：ollama, openai |
+| `--translation-backend` | - | 翻译后端：ollama, openai, deepl, google |
 | `--model` | `-m` | 翻译模型 |
 | `--bilingual / --no-bilingual` | - | 生成双语字幕（默认取配置 `output.bilingual`） |
 
@@ -929,7 +961,10 @@ WantedBy=multi-user.target
 subtitle-forge config set ollama.host http://192.168.1.100:11434
 
 # OpenAI 兼容后端：openai.base_url 指向哪里，字幕就发到哪里，云端服务也一样
-subtitle-forge config set translation.backend openai
+subtitle-forge config set openai.base_url https://api.openai.com/v1
+
+# DeepL、Google 是云端机器翻译：选了它们，字幕就发给这两家
+subtitle-forge config set translation.backend deepl
 ```
 
 把翻译放到局域网里的另一台强机上、或者交给云端 API，都是合理用法，**但要清楚字幕内容离开了本机**。
@@ -1013,7 +1048,7 @@ subtitle-forge config check --verbose
 语音识别和翻译两项都显示 ready，就说明离线环境是完整的。
 此时整条流水线（ffmpeg 抽音频 → 转录 → 翻译 → 写 SRT）不需要任何外部网络。
 
-> **注意**：翻译后端的地址（`ollama.host` 或 `openai.base_url`）必须是本机地址，否则第 2 条边界依然成立——
+> **注意**：翻译后端必须是本机服务（`ollama.host` 或 `openai.base_url` 指向本机；DeepL、Google 无法离线），否则第 2 条边界依然成立——
 > 离线机器上指向局域网另一台机器，字幕一样会离开这台电脑。
 
 ---

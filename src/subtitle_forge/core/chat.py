@@ -1,6 +1,4 @@
-"""The chat backends the translator sends its prompts through, and the factory that builds one.
-
-Only the backend translation.backend names is ever built: there is no fallback to another."""
+"""The LLM chat backends the LLM translator sends its prompts through, and their factory."""
 
 import logging
 import os
@@ -17,24 +15,14 @@ from ..models.config import (
     TranslationConfig,
 )
 from .model_manager import DownloadProgress, OllamaModelManager
+from .service import ServiceError, TranslationService, json_or_raise
 
 logger = logging.getLogger(__name__)
 
 
-class ChatRequestError(Exception):
-    """The server answered with an error; ``status_code`` is None when it gave none."""
-
-    def __init__(self, message: str, status_code: Optional[int] = None):
-        super().__init__(message)
-        self.status_code = status_code
-
-
-class ChatBackend(Protocol):
-    """What the translator and the entry paths need from a chat backend."""
-
-    label: str  # Kind of server, for messages
-    endpoint: str  # Where it is reached, for messages
-    model: str
+class ChatBackend(TranslationService, Protocol):
+    """A service that answers a prompt; check_model_available() looks ``model`` up in
+    list_models()."""
 
     def chat(self, prompt: str, *, json_keys: Optional[Sequence[str]] = None) -> str:
         """Send ``prompt`` as one user message and return the reply text.
@@ -45,26 +33,9 @@ class ChatBackend(Protocol):
                 it lists; the backend constrains the reply to that shape where it can.
 
         Raises:
-            ChatRequestError: The server rejected the request.
+            ServiceError: The server rejected the request.
             httpx.TransportError: The server could not be reached or dropped the connection.
         """
-        ...
-
-    def check_connection(self) -> bool:
-        """True when the server answers at all."""
-        ...
-
-    def list_models(self) -> List[str]:
-        """Model names the server offers.
-
-        Raises:
-            ChatRequestError, or the transport error underneath it, when the server cannot
-            be asked. Never folded into []: an empty list means it answered and has none.
-        """
-        ...
-
-    def check_model_available(self) -> bool:
-        """True when ``model`` is among list_models(); raises whatever that raises."""
         ...
 
 
@@ -99,7 +70,7 @@ class OllamaChat:
         try:
             response = self.client.chat(**kwargs)
         except ResponseError as e:
-            raise ChatRequestError(str(e), e.status_code) from e
+            raise ServiceError(str(e), e.status_code) from e
         return str(response["message"]["content"] or "")
 
     def check_connection(self) -> bool:
@@ -109,13 +80,13 @@ class OllamaChat:
         try:
             return self.model_manager.list_models()
         except ResponseError as e:
-            raise ChatRequestError(str(e), e.status_code) from e
+            raise ServiceError(str(e), e.status_code) from e
 
     def check_model_available(self) -> bool:
         try:
             return self.model_manager.is_model_available(self.model)
         except ResponseError as e:
-            raise ChatRequestError(str(e), e.status_code) from e
+            raise ServiceError(str(e), e.status_code) from e
 
     def ensure_model_ready(
         self,
@@ -174,11 +145,11 @@ class OpenAIChat:
                     f"trying {_RESPONSE_FORMATS[self._format_index] or 'none'}"
                 )
                 continue
-            data = _json_or_raise(response)
+            data = json_or_raise(response)
             try:
                 content = data["choices"][0]["message"]["content"]
             except (KeyError, IndexError, TypeError) as e:
-                raise ChatRequestError(f"Unexpected reply shape: {str(data)[:200]}") from e
+                raise ServiceError(f"Unexpected reply shape: {str(data)[:200]}") from e
             return content or ""
 
     def check_connection(self) -> bool:
@@ -190,11 +161,11 @@ class OpenAIChat:
         return True
 
     def list_models(self) -> List[str]:
-        data = _json_or_raise(self._http.get("models"))
+        data = json_or_raise(self._http.get("models"))
         try:
             return [m["id"] for m in data["data"]]
         except (KeyError, TypeError) as e:
-            raise ChatRequestError(f"Unexpected model list: {str(data)[:200]}") from e
+            raise ServiceError(f"Unexpected model list: {str(data)[:200]}") from e
 
     def check_model_available(self) -> bool:
         return self.model in self.list_models()
@@ -222,17 +193,6 @@ def _response_format(kind: str, keys: Sequence[str]) -> Dict[str, Any]:
     }
 
 
-def _json_or_raise(response: httpx.Response) -> Any:
-    if response.status_code >= 400:
-        raise ChatRequestError(
-            f"HTTP {response.status_code}: {response.text[:300]}", response.status_code
-        )
-    try:
-        return response.json()
-    except ValueError as e:
-        raise ChatRequestError(f"Reply is not JSON: {response.text[:200]}") from e
-
-
 def create_chat_backend(config: AppConfig) -> ChatBackend:
     """Build the backend ``config.translation.backend`` names, from its config section.
 
@@ -240,7 +200,7 @@ def create_chat_backend(config: AppConfig) -> ChatBackend:
         config: The application config.
 
     Raises:
-        ValueError: translation.backend names no known backend.
+        ValueError: translation.backend names no LLM backend.
     """
     backend = config.translation.backend
     if backend == "ollama":

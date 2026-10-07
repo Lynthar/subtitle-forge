@@ -2,7 +2,7 @@
 
 [![license](https://img.shields.io/github/license/Lynthar/subtitle-forge)](LICENSE)
 
-Local-first CLI and HTTP pipeline that transcribes video with faster-whisper and translates subtitles with a local LLM via Ollama or any OpenAI-compatible server
+Local-first CLI and HTTP pipeline that transcribes video with faster-whisper and translates subtitles with a local LLM (Ollama or any OpenAI-compatible server) or with DeepL / Google
 
 English | [简体中文](README.zh-CN.md)
 
@@ -20,8 +20,8 @@ flowchart LR
 ## Install
 
 Not published on PyPI; install from source. Prerequisites: Python 3.11+, `ffmpeg`
-on PATH, and a translation server: a running Ollama, or any OpenAI-compatible one
-(LM Studio, llama.cpp, vLLM, a cloud API).
+on PATH, and a translation service: a running Ollama, any OpenAI-compatible server
+(LM Studio, llama.cpp, vLLM, a cloud API), or a DeepL / Google Cloud Translation key.
 
 ```bash
 git clone https://github.com/Lynthar/subtitle-forge.git
@@ -83,7 +83,7 @@ likely to change:
 | `whisper.model` | `large-v3` |
 | `whisper.device` / `compute_type` | `cuda` / `float16` |
 | `whisper.use_whisperx` | `true` |
-| `translation.backend` | `ollama` (or `openai`) |
+| `translation.backend` | `ollama` (or `openai`, `deepl`, `google`) |
 | `ollama.model` | `qwen2.5:14b` |
 | `ollama.host` | `http://localhost:11434` |
 | `timestamp.mode` | `minimal` |
@@ -95,10 +95,10 @@ read at runtime.
 ## Limitations
 
 - **SRT output only** — no WebVTT, ASS or TTML.
-- **Translation needs a server you configure**: Ollama, or an OpenAI-compatible one.
-  Without it you can still `transcribe`, but that's as far as it goes. Only the
-  configured backend is used: no fallback to another, no bundled model, and nothing
-  goes to a cloud service unless you set one up.
+- **Translation needs a service you configure**: Ollama, an OpenAI-compatible server,
+  DeepL or Google. Without it you can still `transcribe`, but that's as far as it
+  goes. Only the configured backend is used: no fallback to another, no bundled
+  model, and nothing goes to a cloud service unless you set one up.
 - **Whisper's 99 languages refer to transcription.** Translation has proper
   language names for fourteen; anything else gets passed to the model as a bare
   language code.

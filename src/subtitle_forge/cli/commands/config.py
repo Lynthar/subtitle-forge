@@ -9,7 +9,12 @@ from rich.console import Console
 from rich.table import Table
 from rich.panel import Panel
 
-from ...models.config import OPENAI_API_KEY_ENV, AppConfig
+from ...models.config import (
+    DEEPL_API_KEY_ENV,
+    GOOGLE_API_KEY_ENV,
+    OPENAI_API_KEY_ENV,
+    AppConfig,
+)
 from ...utils.gpu import get_gpu_info, check_cuda_available
 from ...utils.progress import (
     print_success,
@@ -80,8 +85,13 @@ def show():
             table.add_row(section_field.name, _display(value, section_field.name))
 
     console.print(table)
-    if os.environ.get(OPENAI_API_KEY_ENV):
-        console.print(f"\n{OPENAI_API_KEY_ENV} is set and overrides openai.api_key")
+    for env, section in (
+        (OPENAI_API_KEY_ENV, "openai"),
+        (DEEPL_API_KEY_ENV, "deepl"),
+        (GOOGLE_API_KEY_ENV, "google"),
+    ):
+        if os.environ.get(env):
+            console.print(f"\n{env} is set and overrides {section}.api_key")
     console.print(f"\nConfig file: {_config_file_display()}")
 
 
@@ -268,33 +278,38 @@ def check(
     # Check the configured translation backend
     console.print(f"\n[bold]Translation ({config.translation.backend}):[/bold]")
     try:
-        from ...core.chat import OllamaChat, create_chat_backend
+        from ...core.chat import OllamaChat
+        from ...core.translator import create_translator
 
-        chat = create_chat_backend(config)
+        chat = create_translator(config).backend
         is_ollama = isinstance(chat, OllamaChat)
 
         if chat.check_connection():
             console.print("  [green]Connection:[/green] OK")
             console.print(f"    Endpoint: {chat.endpoint}")
 
-            available_models = chat.list_models()
-            if verbose:
-                console.print(
-                    f"    Available models: {', '.join(available_models) if available_models else 'None'}"
-                )
-
-            if chat.check_model_available():
-                console.print(f"  [green]Model:[/green] {chat.model} (ready)")
-            elif is_ollama:
-                console.print(f"  [yellow]Model:[/yellow] {chat.model} (not downloaded)")
-                console.print(
-                    "    [yellow]Download with:[/yellow] subtitle-forge config pull-model"
-                )
-                issues.append(f"Translation model '{chat.model}' not downloaded")
+            if not chat.model:
+                # A machine translation service has no model to pick; what can fail is the key.
+                chat.check_model_available()
+                console.print("  [green]API key:[/green] accepted")
             else:
-                console.print(f"  [yellow]Model:[/yellow] {chat.model} (not offered)")
-                console.print(f"    Offered: {', '.join(available_models) or 'nothing'}")
-                issues.append(f"Translation model '{chat.model}' not offered by {chat.endpoint}")
+                available_models = chat.list_models()
+                if verbose:
+                    console.print(f"    Available models: {', '.join(available_models) or 'None'}")
+                if chat.check_model_available():
+                    console.print(f"  [green]Model:[/green] {chat.model} (ready)")
+                elif is_ollama:
+                    console.print(f"  [yellow]Model:[/yellow] {chat.model} (not downloaded)")
+                    console.print(
+                        "    [yellow]Download with:[/yellow] subtitle-forge config pull-model"
+                    )
+                    issues.append(f"Translation model '{chat.model}' not downloaded")
+                else:
+                    console.print(f"  [yellow]Model:[/yellow] {chat.model} (not offered)")
+                    console.print(f"    Offered: {', '.join(available_models) or 'nothing'}")
+                    issues.append(
+                        f"Translation model '{chat.model}' not offered by {chat.endpoint}"
+                    )
         else:
             console.print("  [red]Connection:[/red] Failed")
             console.print(f"    Cannot connect to {chat.endpoint}")
@@ -483,11 +498,11 @@ def show_prompt():
     Example:
         subtitle-forge config show-prompt
     """
-    from ...core.translator import SubtitleTranslator
+    from ...core.translator import SubtitleTranslator, effective_prompt_template
 
     config = _load_config()
-    prompt = SubtitleTranslator.from_config(config).get_prompt_template()
     template_id = config.translation.prompt_template_id
+    prompt = effective_prompt_template(template_id)
 
     # A dangling template id resolves to the default, so label what is
     # actually shown rather than what the config asked for.
@@ -603,10 +618,10 @@ def export_prompt(
     Example:
         subtitle-forge config export-prompt -o my_prompt.txt
     """
-    from ...core.translator import SubtitleTranslator
+    from ...core.translator import effective_prompt_template
 
     config = _load_config()
-    prompt = SubtitleTranslator.from_config(config).get_prompt_template()
+    prompt = effective_prompt_template(config.translation.prompt_template_id)
 
     try:
         output.write_text(prompt, encoding="utf-8")

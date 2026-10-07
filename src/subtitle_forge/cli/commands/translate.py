@@ -51,7 +51,7 @@ def translate_subtitle(
         subtitle-forge translate video.en.srt --target-lang zh
         subtitle-forge translate video.srt -s en -t zh --bilingual
     """
-    from ...core.translator import SubtitleTranslator
+    from ...core.translator import create_translator
     from ...core.subtitle import SubtitleProcessor, validate_language_codes
     from ...utils.progress import SubtitleProgress, print_success, print_error, print_info
     from ..app import EXIT_DEGRADED, apply_translation_flags, get_config
@@ -117,7 +117,7 @@ def translate_subtitle(
 
             # 2. Translate
             tracker.set_description("Translating...")
-            translator = SubtitleTranslator.from_config(config)
+            translator = create_translator(config)
 
             translated = translator.translate(segments, source_lang, target_lang)
             untranslated = translator.untranslated_degradation(target_lang, len(segments))

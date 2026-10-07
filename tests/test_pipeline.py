@@ -380,7 +380,7 @@ def test_server_job_lists_the_written_files_when_the_check_fails(tmp_path, monke
         raise StructureCheckError({output.path: ["#2: overlaps previous by 500 ms"]}, [output])
 
     monkeypatch.setattr(processing, "run_pipeline", failing_pipeline)
-    monkeypatch.setattr(processing.SubtitleTranslator, "from_config", lambda *a, **k: None)
+    monkeypatch.setattr(processing, "create_translator", lambda *a, **k: None)
     job = Job(job_id="j", video_path=str(tmp_path / "clip.mp4"), target_languages=["zh"])
 
     with pytest.raises(StructureCheckError):
@@ -424,7 +424,7 @@ def test_server_job_records_the_degradations(tmp_path, monkeypatch):
     cpu = Degradation("cpu_fallback", "CUDA is unavailable")
     result = PipelineResult("en", 0.9, 1, degradations=[cpu])
     monkeypatch.setattr(processing, "run_pipeline", lambda *a, **k: result)
-    monkeypatch.setattr(processing.SubtitleTranslator, "from_config", lambda *a, **k: None)
+    monkeypatch.setattr(processing, "create_translator", lambda *a, **k: None)
     job = Job(job_id="j", video_path=str(tmp_path / "clip.mp4"), target_languages=["zh"])
 
     processing._run_job(job, AppConfig(), transcriber=None)

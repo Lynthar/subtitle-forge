@@ -1,15 +1,14 @@
 """The chat backends: what goes over the wire, how a rejected JSON constraint is handled, and
 which key is sent. httpx MockTransport stands in for the server."""
 
-import functools
-import json
 from types import SimpleNamespace
 
 import httpx
 import pytest
 from ollama import ResponseError
 
-from subtitle_forge.core.chat import ChatRequestError, OllamaChat, OpenAIChat, create_chat_backend
+from subtitle_forge.core.chat import OllamaChat, OpenAIChat, create_chat_backend
+from subtitle_forge.core.service import ServiceError
 from subtitle_forge.core.translator import SubtitleTranslator
 from subtitle_forge.models.config import (
     OPENAI_API_KEY_ENV,
@@ -22,32 +21,8 @@ from subtitle_forge.models.config import (
 REPLY = {"choices": [{"message": {"content": '{"translations": {"1": "你好"}}'}}]}
 
 
-class _Server:
-    """Records each request; ``respond(request, body)`` gives the response."""
-
-    def __init__(self, respond):
-        self.respond = respond
-        self.requests = []
-
-    def __call__(self, request):
-        body = json.loads(request.content) if request.content else None
-        self.requests.append((request, body))
-        return self.respond(request, body)
-
-    @property
-    def formats(self):
-        return [(b.get("response_format") or {}).get("type") for _, b in self.requests]
-
-
-@pytest.fixture
-def serve(monkeypatch):
-    def install(respond):
-        server = _Server(respond)
-        transport = httpx.MockTransport(server)
-        monkeypatch.setattr(httpx, "Client", functools.partial(httpx.Client, transport=transport))
-        return server
-
-    return install
+def _formats(server):
+    return [(b.get("response_format") or {}).get("type") for _, b in server.requests]
 
 
 def _openai(api_key=None, model="m"):
@@ -88,7 +63,7 @@ def test_a_rejected_schema_falls_back_to_json_object_for_the_rest_of_the_run(ser
     chat.chat("p", json_keys=["1"])
     chat.chat("p", json_keys=["1"])
 
-    assert server.formats == ["json_schema", "json_object", "json_object"]
+    assert _formats(server) == ["json_schema", "json_object", "json_object"]
 
 
 def test_a_server_rejecting_both_gets_no_constraint(serve):
@@ -96,7 +71,7 @@ def test_a_server_rejecting_both_gets_no_constraint(serve):
 
     _openai().chat("p", json_keys=["1"])
 
-    assert server.formats == ["json_schema", "json_object", None]
+    assert _formats(server) == ["json_schema", "json_object", None]
 
 
 def test_a_plain_text_request_carries_no_constraint(serve):
@@ -114,12 +89,12 @@ def test_an_error_not_about_the_constraint_surfaces_and_keeps_it(serve):
     server = serve(lambda request, body: next(replies))
     chat = _openai()
 
-    with pytest.raises(ChatRequestError) as excinfo:
+    with pytest.raises(ServiceError) as excinfo:
         chat.chat("p", json_keys=["1"])
     chat.chat("p", json_keys=["1"])
 
     assert excinfo.value.status_code == 400
-    assert server.formats == ["json_schema", "json_schema"]
+    assert _formats(server) == ["json_schema", "json_schema"]
 
 
 def test_a_null_content_reads_as_an_empty_reply(serve):
@@ -138,7 +113,7 @@ def test_model_listing(serve):
 def test_a_refused_listing_raises_rather_than_reads_as_no_models(serve):
     serve(lambda request, body: httpx.Response(401, json={"error": "bad key"}))
 
-    with pytest.raises(ChatRequestError):
+    with pytest.raises(ServiceError):
         _openai().list_models()
 
 
@@ -197,7 +172,7 @@ def test_an_ollama_error_keeps_its_status_for_the_retry_policy():
 
     chat._client = SimpleNamespace(chat=refuse)  # type: ignore[assignment]
 
-    with pytest.raises(ChatRequestError) as excinfo:
+    with pytest.raises(ServiceError) as excinfo:
         chat.chat("p", json_keys=["1"])
     assert excinfo.value.status_code == 404
 

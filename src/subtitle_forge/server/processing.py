@@ -16,7 +16,7 @@ from typing import List, Optional
 
 from ..core.asr import AsrBackend, create_backend
 from ..core.pipeline import PipelineOutput, StructureCheckError, run_pipeline
-from ..core.translator import SubtitleTranslator
+from ..core.translator import create_translator
 from ..models.config import AppConfig
 from .jobs import Job
 
@@ -74,7 +74,7 @@ def make_processor(config: AppConfig, holder: TranscriberHolder):
 def _run_job(job: Job, config: AppConfig, transcriber: AsrBackend) -> list:
     video_path = Path(job.video_path)
 
-    translator = SubtitleTranslator.from_config(config)
+    translator = create_translator(config)
 
     try:
         result = run_pipeline(

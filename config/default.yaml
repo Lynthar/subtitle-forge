@@ -82,9 +82,19 @@ qwen3_asr:
 
 translation:
   # Translation backend; its connection settings live in the section of the same name below.
-  # Options: ollama, openai (any OpenAI-compatible chat API: LM Studio, llama.cpp,
-  # vLLM, Ollama's /v1, or a cloud service). Only the backend named here is ever used.
+  # LLMs: ollama, openai (any OpenAI-compatible chat API: LM Studio, llama.cpp, vLLM,
+  # Ollama's /v1, or a cloud service). Machine translation: deepl, google.
+  # Only the backend named here is ever used.
   backend: ollama
+
+  # Maximum retry attempts on transport errors, rate limits and server errors
+  max_retries: 3
+
+  # Per-request timeout in seconds. Long-running prompts will fail fast
+  # instead of hanging the whole job.
+  request_timeout: 180.0
+
+  # The rest apply to the LLM backends only.
 
   # Generation temperature. Translation is deterministic — keep at 0 unless
   # you want to experiment with creative paraphrasing.
@@ -94,13 +104,6 @@ translation:
   # downward for smaller models (7B / 14B) where large batches degrade
   # parsing reliability.
   max_batch_size: 10
-
-  # Maximum retry attempts on transport errors
-  max_retries: 3
-
-  # Per-request timeout in seconds. Long-running prompts will fail fast
-  # instead of hanging the whole job.
-  request_timeout: 180.0
 
   # Prompt library template id (null = the built-in JSON prompt).
   # `config set-prompt` stores your own text as the template "custom" and selects it.
@@ -123,6 +126,16 @@ openai:
 
   # API key; local servers usually need none. The SUBTITLE_FORGE_OPENAI_API_KEY
   # environment variable takes precedence and keeps the key out of this file.
+  api_key: null
+
+deepl:
+  # DeepL API key; a Free key (ending in ":fx") goes to the Free endpoint automatically.
+  # The SUBTITLE_FORGE_DEEPL_API_KEY environment variable takes precedence.
+  api_key: null
+
+google:
+  # Google Cloud Translation Basic (v2) API key.
+  # The SUBTITLE_FORGE_GOOGLE_API_KEY environment variable takes precedence.
   api_key: null
 
 output:

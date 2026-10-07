@@ -114,7 +114,7 @@ def batch_process(
     """
     from ...core.asr import create_backend
     from ...core.pipeline import build_timestamp_config, run_pipeline
-    from ...core.translator import SubtitleTranslator
+    from ...core.translator import create_translator
     from ...core.subtitle import normalize_target_languages
     from ...core.queue import run_batch_sync
     from ...models.task import VideoTask
@@ -240,7 +240,7 @@ def batch_process(
 
         # Fresh translator per task: it carries per-run failure tracking that
         # workers sharing one instance would clear out from under each other.
-        translator = SubtitleTranslator.from_config(
+        translator = create_translator(
             config,
             save_failed_log=save_debug_log,
             failed_log_path=failed_log_path,

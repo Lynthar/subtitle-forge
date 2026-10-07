@@ -7,7 +7,7 @@ import typer
 from rich.console import Console
 
 from .commands import transcribe, translate, batch, config, serve
-from ..models.config import TRANSLATION_BACKENDS, AppConfig
+from ..models.config import MT_BACKENDS, AppConfig
 from ..utils.logger import setup_logging
 
 app = typer.Typer(
@@ -62,16 +62,25 @@ def whisper_flags_apply(cfg: AppConfig, flags: Mapping[str, object]) -> bool:
 
 
 def apply_translation_flags(cfg: AppConfig, backend: Optional[str], model: Optional[str]) -> None:
-    """Put --translation-backend / --translation-model into cfg; exits 1 if that leaves it invalid."""
-    from ..utils.progress import print_error
+    """Put --translation-backend / --translation-model into cfg, then build its translator
+    once; exits 1 when either fails, before any work."""
+    from ..core.translator import create_translator
+    from ..utils.progress import print_error, print_warning
 
     if backend:
         cfg.translation.backend = backend
-    if model and cfg.translation.backend in TRANSLATION_BACKENDS:
-        # Each backend reads the config section of its own name.
-        getattr(cfg, cfg.translation.backend).model = model
+    if model:
+        # Each backend reads the config section of its own name; an MT one has no model.
+        section = getattr(cfg, cfg.translation.backend, None)
+        if section is not None and hasattr(section, "model"):
+            section.model = model
+        else:
+            print_warning(
+                f"Model {model!r} ignored under translation.backend {cfg.translation.backend}"
+            )
     try:
         cfg.validate()
+        create_translator(cfg)  # An unset API key fails here, not once per batch task
     except ValueError as e:
         print_error(str(e))
         raise typer.Exit(1)
@@ -278,9 +287,10 @@ def process(
         subtitle-forge process video.mp4 -t zh -t ja --bilingual
     """
     from ..core.asr import create_backend
-    from ..core.chat import ChatRequestError, OllamaChat
+    from ..core.chat import OllamaChat
+    from ..core.service import ServiceError
     from ..core.transcriber import build_vad_parameters
-    from ..core.translator import SubtitleTranslator
+    from ..core.translator import create_translator
     from ..utils.progress import (
         SubtitleProgress,
         TranslationProgressTracker,
@@ -298,7 +308,11 @@ def process(
     if whisper_model:
         cfg.whisper.model = whisper_model
     apply_translation_flags(cfg, translation_backend, translation_model)
-    if prompt_template:
+    if prompt_template and cfg.translation.backend in MT_BACKENDS:
+        print_warning(
+            f"--prompt-template: LLM-only, ignored under translation.backend {cfg.translation.backend}"
+        )
+    elif prompt_template:
         # Reject an unknown id here, not after the GPU run: it leaves JSON mode
         # off (id is set) while resolving to the default prompt, so the whole
         # translation runs on the least reliable parse path.
@@ -366,12 +380,12 @@ def process(
         else:
             failed_log_path = None
 
-        translator = SubtitleTranslator.from_config(
+        translator = create_translator(
             cfg,
             save_failed_log=effective_save_failed_log,
             failed_log_path=failed_log_path,
         )
-        chat = translator.chat
+        chat = translator.backend
 
         # Same order as `config pull-model`: an unreachable server must not read as a
         # missing model, or the user is offered a download that cannot work.
@@ -382,8 +396,8 @@ def process(
         try:
             model_available = translator.check_model_available()
             offered = [] if model_available else chat.list_models()
-        except ChatRequestError as e:
-            print_error(f"{chat.label} at {chat.endpoint} could not list its models: {e}")
+        except ServiceError as e:
+            print_error(f"{chat.label} at {chat.endpoint} refused the check: {e}")
             raise typer.Exit(1)
 
         # Fail or download here, not after transcription: a GPU run that ends with no

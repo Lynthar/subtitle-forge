@@ -12,12 +12,15 @@ import yaml
 
 # Backends core.asr.create_backend can build; each one reads the config section of the same name.
 ASR_BACKENDS = ("whisper", "qwen3_asr")
-# Likewise for core.chat.create_chat_backend.
-TRANSLATION_BACKENDS = ("ollama", "openai")
+# Likewise for core.translator.create_translator: LLMs take a prompt, MT_BACKENDS take texts.
+TRANSLATION_BACKENDS = ("ollama", "openai", "deepl", "google")
+MT_BACKENDS = ("deepl", "google")
 
-# Read before openai.api_key, so the key never has to be written into the config file. Not
-# OPENAI_API_KEY: that one is meant for api.openai.com and would go to whatever base_url names.
+# Each is read before the section's api_key, so a key never has to be written into the config
+# file. Not OPENAI_API_KEY: that one is meant for api.openai.com and would go to any base_url.
 OPENAI_API_KEY_ENV = "SUBTITLE_FORGE_OPENAI_API_KEY"
+DEEPL_API_KEY_ENV = "SUBTITLE_FORGE_DEEPL_API_KEY"
+GOOGLE_API_KEY_ENV = "SUBTITLE_FORGE_GOOGLE_API_KEY"
 
 # Keys the ollama section held before translation settings became shared by every backend.
 _MOVED_TO_TRANSLATION = (
@@ -99,15 +102,16 @@ class Qwen3AsrConfig:
 
 @dataclass
 class TranslationConfig:
-    """Translation settings every backend shares; the backend's own section holds the rest."""
+    """Translation settings shared across backends; the backend's own section holds the rest."""
 
     backend: str = "ollama"  # One of TRANSLATION_BACKENDS
+    max_retries: int = 3
+    request_timeout: float = 180.0  # Per-request timeout (seconds)
+    # The rest apply to the LLM backends (ollama, openai) only.
     # Translation is a deterministic task — temperature=0 dramatically reduces
     # the rate of skipped/renumbered segments compared to 0.3.
     temperature: float = 0.0
     max_batch_size: int = 10
-    max_retries: int = 3
-    request_timeout: float = 180.0  # Per-request timeout (seconds)
     prompt_template_id: Optional[str] = None  # Prompt library template (None = built-in prompt)
 
 
@@ -127,6 +131,20 @@ class OpenAIConfig:
     base_url: str = ""
     model: str = ""
     api_key: Optional[str] = None  # OPENAI_API_KEY_ENV overrides it
+
+
+@dataclass
+class DeepLConfig:
+    """DeepL API (translation.backend: deepl); a key ending in ":fx" uses the Free endpoint."""
+
+    api_key: Optional[str] = None  # DEEPL_API_KEY_ENV overrides it
+
+
+@dataclass
+class GoogleConfig:
+    """Google Cloud Translation Basic, v2 (translation.backend: google)."""
+
+    api_key: Optional[str] = None  # GOOGLE_API_KEY_ENV overrides it
 
 
 @dataclass
@@ -188,6 +206,8 @@ class AppConfig:
     translation: TranslationConfig = field(default_factory=TranslationConfig)
     ollama: OllamaConfig = field(default_factory=OllamaConfig)
     openai: OpenAIConfig = field(default_factory=OpenAIConfig)
+    deepl: DeepLConfig = field(default_factory=DeepLConfig)
+    google: GoogleConfig = field(default_factory=GoogleConfig)
     output: OutputConfig = field(default_factory=OutputConfig)
     timestamp: TimestampConfig = field(default_factory=TimestampConfig)
     max_workers: int = 2

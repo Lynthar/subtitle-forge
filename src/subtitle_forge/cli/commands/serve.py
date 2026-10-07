@@ -50,7 +50,7 @@ def serve(
 
     from ...server.auth import TOKEN_ENV_VAR, get_configured_token
     from ...server.app import create_app
-    from ..app import get_config
+    from ..app import apply_translation_flags, get_config
 
     if not no_auth:
         if get_configured_token() is None:
@@ -70,7 +70,9 @@ def serve(
 
     # get_config() (not letting create_app fall back to AppConfig.load()) so
     # the root --config flag reaches the server like every other command.
-    app_instance = create_app(config=get_config(), max_workers=workers, require_auth=not no_auth)
+    config = get_config()
+    apply_translation_flags(config, None, None)  # An unset API key fails here, not in every job
+    app_instance = create_app(config=config, max_workers=workers, require_auth=not no_auth)
 
     uvicorn.run(
         app_instance,

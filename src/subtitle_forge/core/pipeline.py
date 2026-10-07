@@ -7,7 +7,7 @@ and gets a quiet, side-effect-free run.
 
 Caller responsibilities:
 - Build the ASR backend with core.asr.create_backend and ensure its model is cached locally.
-- Build the SubtitleTranslator and ensure its chat backend offers the model,
+- Build the translator with create_translator and check its service before any work,
   unless target_languages is empty (transcribe-only runs pass none).
 - Unload the backend's model when done, if needed (unload_model()).
 
@@ -33,7 +33,7 @@ from .subtitle import (
     validate_language_codes,
 )
 from .timestamp_processor import TimestampProcessor
-from .translator import SubtitleTranslator
+from .translator import Translator
 
 logger = logging.getLogger(__name__)
 
@@ -144,7 +144,7 @@ def run_pipeline(
     transcriber: AsrBackend,
     target_languages: List[str],
     output_dir: Path,
-    translator: Optional[SubtitleTranslator] = None,
+    translator: Optional[Translator] = None,
     source_language: Optional[str] = None,
     keep_original: bool = True,
     original_output_path: Optional[Path] = None,

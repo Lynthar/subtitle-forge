@@ -1,20 +1,36 @@
-"""Subtitle translation through an LLM chat backend."""
+"""Subtitle translation: the LLM branch (SubtitleTranslator), and create_translator, which
+picks it or the machine translation branch in core.mt."""
 
-from typing import Dict, List, Optional, Callable
+from typing import Callable, Dict, List, Optional, Protocol
 import json
 import re
 import logging
-import time
 
-import httpx
-
-from ..models.config import AppConfig, TranslationConfig
+from ..models.config import MT_BACKENDS, AppConfig, TranslationConfig
 from ..models.degradation import TRANSLATION_INCOMPLETE, Degradation
 from ..models.subtitle import SubtitleSegment
-from ..exceptions import TranslationError
-from .chat import ChatBackend, ChatRequestError, create_chat_backend
+from .chat import ChatBackend, create_chat_backend
+from .service import TranslationService, call_with_retries
 
 logger = logging.getLogger(__name__)
+
+# Names the prompts and progress messages use; any other code is passed as is.
+LANGUAGE_NAMES: Dict[str, str] = {
+    "zh": "Simplified Chinese",
+    "zh-TW": "Traditional Chinese",
+    "en": "English",
+    "ja": "Japanese",
+    "ko": "Korean",
+    "es": "Spanish",
+    "fr": "French",
+    "de": "German",
+    "ru": "Russian",
+    "pt": "Portuguese",
+    "it": "Italian",
+    "ar": "Arabic",
+    "vi": "Vietnamese",
+    "th": "Thai",
+}
 
 
 class SubtitleTranslator:
@@ -40,22 +56,7 @@ OUTPUT — return STRICTLY a JSON object of the form:
 Do not include any text outside the JSON object. Do not omit any indices. Do not renumber.
 """
 
-    LANGUAGE_NAMES = {
-        "zh": "Simplified Chinese",
-        "zh-TW": "Traditional Chinese",
-        "en": "English",
-        "ja": "Japanese",
-        "ko": "Korean",
-        "es": "Spanish",
-        "fr": "French",
-        "de": "German",
-        "ru": "Russian",
-        "pt": "Portuguese",
-        "it": "Italian",
-        "ar": "Arabic",
-        "vi": "Vietnamese",
-        "th": "Thai",
-    }
+    LANGUAGE_NAMES = LANGUAGE_NAMES
 
     # Approximate VRAM requirements for Ollama models (MB)
     OLLAMA_MODEL_VRAM = {
@@ -104,13 +105,13 @@ Do not include any text outside the JSON object. Do not omit any indices. Do not
     def __init__(
         self,
         settings: TranslationConfig,
-        chat: ChatBackend,
+        backend: ChatBackend,
         *,
         save_failed_log: bool = False,
         failed_log_path: Optional[str] = None,
     ):
         self.settings = settings
-        self.chat = chat
+        self.backend = backend
         self.save_failed_log = save_failed_log
         self.failed_log_path = failed_log_path
         self._failed_translations: List[dict] = []  # Track failed translations
@@ -163,7 +164,7 @@ Do not include any text outside the JSON object. Do not omit any indices. Do not
         the model name ("qwen2.5:14b", "Qwen2.5-14B-Instruct").
         """
         cfg_max = max(1, self.settings.max_batch_size)
-        match = re.search(r"(?<![\d.])(\d+(?:\.\d+)?)b(?![a-z0-9])", self.chat.model.lower())
+        match = re.search(r"(?<![\d.])(\d+(?:\.\d+)?)b(?![a-z0-9])", self.backend.model.lower())
         if match is None:
             # A sizeless name on an OpenAI-compatible server is usually a large cloud model;
             # on Ollama it is a default tag, typically 8B or smaller.
@@ -181,32 +182,19 @@ Do not include any text outside the JSON object. Do not omit any indices. Do not
 
     def check_connection(self) -> bool:
         """Whether the backend's server answers."""
-        return self.chat.check_connection()
+        return self.backend.check_connection()
 
     def check_model_available(self) -> bool:
         """Whether the server offers the model; raises when it cannot be asked."""
-        return self.chat.check_model_available()
+        return self.backend.check_model_available()
 
     def get_prompt_template(self) -> str:
         """The selected library template, or the default when none is (or it is gone)."""
-        selected = self._selected_template()
-        if selected is not None:
-            return selected
-        if self.settings.prompt_template_id:
-            logger.warning(
-                f"Prompt template '{self.settings.prompt_template_id}' not found, using default"
-            )
-        return self.DEFAULT_PROMPT_TEMPLATE
+        return effective_prompt_template(self.settings.prompt_template_id)
 
     def _selected_template(self) -> Optional[str]:
         """The library template body in effect; None means the default applies."""
-        if self.settings.prompt_template_id:
-            from .prompt_library import get_prompt_library
-
-            template = get_prompt_library().get_template(self.settings.prompt_template_id)
-            if template:
-                return template.template
-        return None
+        return library_template(self.settings.prompt_template_id)
 
     def _build_translation_prompt(
         self,
@@ -564,89 +552,46 @@ FOLLOWING DIALOGUE (for context, DO NOT translate):
         # The keys the default prompt lists, so the backend can constrain the reply to them.
         json_keys = [str(seg.index) for seg in segments] if self._is_json_mode() else None
 
-        for attempt in range(self.settings.max_retries):
-            try:
-                reply = self.chat.chat(prompt, json_keys=json_keys)
+        reply = call_with_retries(
+            lambda: self.backend.chat(prompt, json_keys=json_keys), self.settings.max_retries
+        )
 
-                translated = self._parse_translation_response(reply, segments)
+        translated = self._parse_translation_response(reply, segments)
 
-                # Compressed per-batch failure summary at INFO, not WARNING: the individual retry
-                # that runs immediately after usually fixes these. The final WARNING, if any, comes
-                # from translate() once all batches have settled.
-                if self._batch_failure_indices:
-                    summary_parts = []
-                    for reason, indices in self._batch_failure_indices.items():
-                        if len(indices) <= 5:
-                            idx_str = ", ".join(str(i) for i in indices)
-                        else:
-                            # Show first 3 and last 2 with ellipsis
-                            idx_str = f"{indices[0]}, {indices[1]}, {indices[2]}...{indices[-2]}, {indices[-1]}"
-                        summary_parts.append(f"{reason} [{idx_str}]")
-                    logger.info(
-                        f"Batch parse issues, retrying individually: {'; '.join(summary_parts)}"
+        # Compressed per-batch failure summary at INFO, not WARNING: the individual retry
+        # that runs immediately after usually fixes these. The final WARNING, if any, comes
+        # from translate() once all batches have settled.
+        if self._batch_failure_indices:
+            summary_parts = []
+            for reason, indices in self._batch_failure_indices.items():
+                if len(indices) <= 5:
+                    idx_str = ", ".join(str(i) for i in indices)
+                else:
+                    # Show first 3 and last 2 with ellipsis
+                    idx_str = (
+                        f"{indices[0]}, {indices[1]}, {indices[2]}...{indices[-2]}, {indices[-1]}"
                     )
+                summary_parts.append(f"{reason} [{idx_str}]")
+            logger.info(f"Batch parse issues, retrying individually: {'; '.join(summary_parts)}")
 
-                # Failure detection: the translated text is identical to the original AND source !=
-                # target (same language makes identical text a legitimate outcome).
-                failed_segments = [
-                    (i, seg)
-                    for i, seg in enumerate(translated)
-                    if seg.text == segments[i].text and source_lang != target_lang
-                ]
+        # Failure detection: the translated text is identical to the original AND source !=
+        # target (same language makes identical text a legitimate outcome).
+        failed_segments = [
+            (i, seg)
+            for i, seg in enumerate(translated)
+            if seg.text == segments[i].text and source_lang != target_lang
+        ]
 
-                # Retry ANY failure individually — the old "only if >50% failed" threshold left
-                # small batches with one or two untranslated segments unfixed, the most common
-                # failure in practice.
-                if failed_segments:
-                    logger.debug(
-                        f"Batch had {len(failed_segments)} failure(s), retrying individually"
-                    )
-                    translated = self._retry_failed_individually(
-                        translated, failed_segments, source_lang, target_lang
-                    )
+        # Retry ANY failure individually — the old "only if >50% failed" threshold left
+        # small batches with one or two untranslated segments unfixed, the most common
+        # failure in practice.
+        if failed_segments:
+            logger.debug(f"Batch had {len(failed_segments)} failure(s), retrying individually")
+            translated = self._retry_failed_individually(
+                translated, failed_segments, source_lang, target_lang
+            )
 
-                return translated
-
-            except ChatRequestError as e:
-                # Client errors (bad request, model not found, bad key) won't heal on
-                # retry — fail immediately. 5xx / 429 / unknown are worth retrying: a
-                # local server restarting or overloaded recovers.
-                status_code = e.status_code
-                if isinstance(status_code, int) and 400 <= status_code < 500 and status_code != 429:
-                    raise TranslationError(f"Translation failed: {e}") from e
-                logger.warning(
-                    f"Translation request failed "
-                    f"(attempt {attempt + 1}/{self.settings.max_retries}): {e}"
-                )
-                if attempt == self.settings.max_retries - 1:
-                    raise TranslationError(f"Translation failed: {e}") from e
-                time.sleep(min(2**attempt, 8))
-            except Exception as e:
-                if not self._is_retryable_transport_error(e):
-                    raise
-                logger.warning(
-                    f"Translation request failed ({type(e).__name__}) "
-                    f"(attempt {attempt + 1}/{self.settings.max_retries}): {e}"
-                )
-                if attempt == self.settings.max_retries - 1:
-                    raise TranslationError(
-                        f"Translation failed after {self.settings.max_retries} attempts: {e}"
-                    ) from e
-                time.sleep(min(2**attempt, 8))
-
-        return segments  # Fallback to original
-
-    @staticmethod
-    def _is_retryable_transport_error(e: Exception) -> bool:
-        """Whether an exception is a transient transport failure worth retrying.
-
-        httpx.TransportError covers the whole family — timeouts, connect
-        failures, AND read/write/protocol errors (a server dying mid-response
-        raises ReadError or RemoteProtocolError). The previous class-NAME
-        match on "Timeout"/"Connect" let those escape as raw httpx exceptions
-        with no retry at all.
-        """
-        return isinstance(e, httpx.TransportError)
+        return translated
 
     def _retry_failed_individually(
         self,
@@ -668,7 +613,7 @@ FOLLOWING DIALOGUE (for context, DO NOT translate):
                     f"Output ONLY the translation, nothing else:\n\n{seg.text}"
                 )
 
-                trans_text = self.chat.chat(simple_prompt).strip()
+                trans_text = self.backend.chat(simple_prompt).strip()
 
                 # Clean up response
                 trans_text = self._clean_translation(trans_text, seg.text)
@@ -729,7 +674,7 @@ FOLLOWING DIALOGUE (for context, DO NOT translate):
         if batch_size != self.settings.max_batch_size:
             logger.info(
                 f"Auto-clamped translation batch size: {self.settings.max_batch_size} -> "
-                f"{batch_size} (model: {self.chat.model})"
+                f"{batch_size} (model: {self.backend.model})"
             )
 
         logger.info(
@@ -811,7 +756,7 @@ FOLLOWING DIALOGUE (for context, DO NOT translate):
 
             report = {
                 "timestamp": datetime.now().isoformat(),
-                "model": self.chat.model,
+                "model": self.backend.model,
                 "total_failures": len(self._failed_translations),
                 "summary": {
                     "model_refusal": len(categorized["model_refusal"]),
@@ -849,3 +794,77 @@ FOLLOWING DIALOGUE (for context, DO NOT translate):
             TRANSLATION_INCOMPLETE,
             f"{target_lang}: {missing} of {total} segments left in the source language",
         )
+
+
+def library_template(template_id: Optional[str]) -> Optional[str]:
+    """The body of the library template ``template_id`` names; None when unset or gone."""
+    if not template_id:
+        return None
+    from .prompt_library import get_prompt_library
+
+    template = get_prompt_library().get_template(template_id)
+    return template.template if template else None
+
+
+def effective_prompt_template(template_id: Optional[str]) -> str:
+    """The prompt the LLM branch runs: the selected library template, else the default."""
+    selected = library_template(template_id)
+    if selected is not None:
+        return selected
+    if template_id:
+        logger.warning(f"Prompt template '{template_id}' not found, using default")
+    return SubtitleTranslator.DEFAULT_PROMPT_TEMPLATE
+
+
+class Translator(Protocol):
+    """What the pipeline and the entry paths use, whichever branch built it."""
+
+    LANGUAGE_NAMES: Dict[str, str]
+
+    @property
+    def backend(self) -> TranslationService: ...
+
+    def translate(
+        self,
+        segments: List[SubtitleSegment],
+        source_lang: str,
+        target_lang: str,
+        progress_callback: Optional[Callable[[int, int], None]] = None,
+        context_window: int = 3,
+    ) -> List[SubtitleSegment]: ...
+
+    def untranslated_degradation(self, target_lang: str, total: int) -> Optional[Degradation]: ...
+
+    def effective_batch_size(self) -> int: ...
+
+    def check_connection(self) -> bool: ...
+
+    def check_model_available(self) -> bool: ...
+
+
+def create_translator(
+    config: AppConfig,
+    *,
+    save_failed_log: bool = False,
+    failed_log_path: Optional[str] = None,
+) -> Translator:
+    """Build the translator ``config.translation.backend`` selects: the LLM branch for an
+    LLM backend, the machine translation branch for MT_BACKENDS. Only that backend is ever
+    built; there is no fallback to another.
+
+    Args:
+        config: The application config.
+        save_failed_log: Write the LLM branch's parse failures to ``failed_log_path`` (or a
+            timestamped file in the working directory); the MT branch has none to write.
+        failed_log_path: Where that log goes.
+
+    Raises:
+        ValueError: translation.backend names no known backend, or its API key is unset.
+    """
+    if config.translation.backend in MT_BACKENDS:
+        from .mt import MachineTranslator, create_mt_backend
+
+        return MachineTranslator(config.translation, create_mt_backend(config))
+    return SubtitleTranslator.from_config(
+        config, save_failed_log=save_failed_log, failed_log_path=failed_log_path
+    )

@@ -100,7 +100,7 @@ def test_the_openai_backend_needs_a_url_and_a_model():
 
 def test_an_unknown_backend_is_rejected():
     config = AppConfig()
-    config.translation.backend = "deepl"
+    config.translation.backend = "bing"
 
     with pytest.raises(ValueError, match="translation.backend"):
         config.validate()

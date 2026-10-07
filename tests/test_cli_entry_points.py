@@ -47,14 +47,7 @@ class _FakeTranscriber:
 
 class _FakeTranslator:
     LANGUAGE_NAMES: ClassVar[dict] = {}
-    chat = SimpleNamespace(label="Fake", endpoint="fake://", model="fake")
-
-    def __init__(self, *args, **kwargs):
-        pass
-
-    @classmethod
-    def from_config(cls, cfg, **overrides):
-        return cls()
+    backend = SimpleNamespace(label="Fake", endpoint="fake://", model="fake")
 
     def check_connection(self):
         return True
@@ -89,7 +82,9 @@ def _fake_components(monkeypatch):
     backend_degradations.clear()
     untranslated.clear()
     monkeypatch.setattr(asr_module, "create_backend", lambda config, **o: _FakeTranscriber())
-    monkeypatch.setattr(translator_module, "SubtitleTranslator", _FakeTranslator)
+    monkeypatch.setattr(
+        translator_module, "create_translator", lambda config, **kw: _FakeTranslator()
+    )
     monkeypatch.setattr(pipeline_module, "AudioExtractor", _FakeExtractor)
 
 
