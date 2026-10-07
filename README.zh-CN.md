@@ -42,7 +42,7 @@ NVIDIA 显卡不是必需的，但有没有它差别很大。
 
 ## 用法
 
-先跑这一条，它会检查 ffmpeg、Ollama 和显卡，并把模型下载下来：
+先跑这一条，它会检查 ffmpeg 和显卡，让你选语音识别与翻译后端，并把模型下载下来：
 
 ```bash
 subtitle-forge quickstart

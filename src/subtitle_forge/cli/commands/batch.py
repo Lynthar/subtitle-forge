@@ -5,6 +5,8 @@ from typing import Optional, List
 
 import typer
 
+from . import ASR_BACKEND_HELP, TRANSLATION_BACKEND_HELP
+
 VIDEO_EXTENSIONS = {".mp4", ".mkv", ".avi", ".mov", ".webm", ".flv", ".wmv", ".m4v"}
 
 
@@ -57,15 +59,14 @@ def batch_process(
         "-r",
         help="Recursively search for videos",
     ),
+    asr_backend: Optional[str] = typer.Option(None, "--asr-backend", help=ASR_BACKEND_HELP),
     whisper_model: Optional[str] = typer.Option(
         None,
         "--whisper-model",
         help="Whisper model name",
     ),
     translation_backend: Optional[str] = typer.Option(
-        None,
-        "--translation-backend",
-        help="Translation backend: ollama, openai (default: config translation.backend)",
+        None, "--translation-backend", help=TRANSLATION_BACKEND_HELP
     ),
     translation_model: Optional[str] = typer.Option(
         None,
@@ -127,7 +128,13 @@ def batch_process(
         print_task_summary,
         print_warning,
     )
-    from ..app import EXIT_DEGRADED, apply_translation_flags, get_config
+    from ..app import (
+        EXIT_DEGRADED,
+        apply_asr_flag,
+        apply_translation_flags,
+        get_config,
+        whisper_flags_apply,
+    )
 
     # get_config() (not a bare AppConfig.load()) so the root --config flag
     # actually reaches this command.
@@ -153,7 +160,8 @@ def batch_process(
         workers = 1
 
     # Override config
-    if whisper_model:
+    apply_asr_flag(config, asr_backend)
+    if whisper_flags_apply(config, {"--whisper-model": whisper_model}) and whisper_model:
         config.whisper.model = whisper_model
     apply_translation_flags(config, translation_backend, translation_model)
     keep_original, bilingual = config.output.resolve_flags(

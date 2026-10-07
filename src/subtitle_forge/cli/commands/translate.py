@@ -6,6 +6,8 @@ from typing import Optional
 
 import typer
 
+from . import TRANSLATION_BACKEND_HELP
+
 
 def translate_subtitle(
     subtitle: Path = typer.Argument(..., help="Subtitle file path (SRT)", exists=True),
@@ -28,9 +30,7 @@ def translate_subtitle(
         help="Output SRT file path",
     ),
     translation_backend: Optional[str] = typer.Option(
-        None,
-        "--translation-backend",
-        help="Translation backend: ollama, openai (default: config translation.backend)",
+        None, "--translation-backend", help=TRANSLATION_BACKEND_HELP
     ),
     model: Optional[str] = typer.Option(
         None,

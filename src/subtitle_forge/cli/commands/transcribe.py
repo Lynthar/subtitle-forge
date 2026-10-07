@@ -5,6 +5,8 @@ from typing import Dict, List, Optional
 
 import typer
 
+from . import ASR_BACKEND_HELP
+
 
 def transcribe_video(
     video: Path = typer.Argument(..., help="Video file path", exists=True),
@@ -20,6 +22,7 @@ def transcribe_video(
         "-l",
         help="Source language (auto-detect if not specified)",
     ),
+    asr_backend: Optional[str] = typer.Option(None, "--asr-backend", help=ASR_BACKEND_HELP),
     model: Optional[str] = typer.Option(
         None,
         "--model",
@@ -86,11 +89,18 @@ def transcribe_video(
     )
     from ...utils.logger import setup_logging
     from ...models.degradation import AUTO_MODEL_FALLBACK, Degradation
-    from ..app import EXIT_DEGRADED, get_config, prepare_asr_backend, whisper_flags_apply
+    from ..app import (
+        EXIT_DEGRADED,
+        apply_asr_flag,
+        get_config,
+        prepare_asr_backend,
+        whisper_flags_apply,
+    )
 
     # get_config() (not a bare AppConfig.load()) so the root --config flag
     # actually reaches this command.
     config = get_config()
+    apply_asr_flag(config, asr_backend)
     progress = SubtitleProgress()
 
     # Handle --save-debug-log option

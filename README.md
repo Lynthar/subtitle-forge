@@ -44,7 +44,8 @@ An NVIDIA GPU is not required, but it makes a big difference.
 
 ## Usage
 
-Run this first: it checks ffmpeg, Ollama and your GPU, and downloads the models.
+Run this first: it checks ffmpeg and your GPU, lets you choose the speech
+recognition and translation backends, and downloads the models.
 
 ```bash
 subtitle-forge quickstart

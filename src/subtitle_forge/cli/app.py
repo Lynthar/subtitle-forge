@@ -6,6 +6,7 @@ from typing import Dict, List, Mapping, Optional
 import typer
 from rich.console import Console
 
+from .commands import ASR_BACKEND_HELP, TRANSLATION_BACKEND_HELP
 from .commands import transcribe, translate, batch, config, serve
 from ..models.config import MT_BACKENDS, AppConfig
 from ..utils.logger import setup_logging
@@ -45,6 +46,21 @@ def get_config() -> AppConfig:
     if _config is None:
         _config = AppConfig.load(_config_path)
     return _config
+
+
+def apply_asr_flag(cfg: AppConfig, backend: Optional[str]) -> None:
+    """Put --asr-backend into cfg; exits 1 on an unknown backend, before any work. Runs before
+    whisper_flags_apply, which reads the backend."""
+    if not backend:
+        return
+    cfg.asr.backend = backend
+    try:
+        cfg.validate()
+    except ValueError as e:
+        from ..utils.progress import print_error
+
+        print_error(str(e))
+        raise typer.Exit(1)
 
 
 def whisper_flags_apply(cfg: AppConfig, flags: Mapping[str, object]) -> bool:
@@ -193,15 +209,14 @@ def process(
         "-o",
         help="Output directory",
     ),
+    asr_backend: Optional[str] = typer.Option(None, "--asr-backend", help=ASR_BACKEND_HELP),
     whisper_model: Optional[str] = typer.Option(
         None,
         "--whisper-model",
         help="Whisper model name",
     ),
     translation_backend: Optional[str] = typer.Option(
-        None,
-        "--translation-backend",
-        help="Translation backend: ollama, openai (default: config translation.backend)",
+        None, "--translation-backend", help=TRANSLATION_BACKEND_HELP
     ),
     translation_model: Optional[str] = typer.Option(
         None,
@@ -305,6 +320,7 @@ def process(
     cfg = get_config()
 
     # Override config if specified
+    apply_asr_flag(cfg, asr_backend)
     if whisper_model:
         cfg.whisper.model = whisper_model
     apply_translation_flags(cfg, translation_backend, translation_model)
@@ -538,15 +554,15 @@ def quickstart():
 
     Guides you through:
     - Checking system requirements (ffmpeg, GPU)
-    - Verifying Ollama is running
-    - Downloading the translation model
+    - Choosing the speech recognition and translation backends
+    - Downloading their models and checking the translation service
 
     Example:
         subtitle-forge quickstart
     """
     from ..utils.setup_wizard import run_setup_wizard
 
-    run_setup_wizard()
+    run_setup_wizard(get_config(), get_config_path())
 
 
 @app.command()

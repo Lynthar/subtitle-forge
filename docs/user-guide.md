@@ -257,6 +257,8 @@ pip install -e '.[qwen3-asr]'
 subtitle-forge config set asr.backend qwen3_asr
 ```
 
+只想某一次换后端时，`process`、`batch`、`transcribe` 都可以加 `--asr-backend qwen3_asr`，不改配置。
+
 | 配置项 | 默认 | 说明 |
 |------|------|------|
 | `qwen3_asr.model` | `Qwen/Qwen3-ASR-1.7B` | 约 4.7 GB；显存紧张换 `Qwen/Qwen3-ASR-0.6B`（约 1.9 GB） |
@@ -591,6 +593,7 @@ subtitle-forge process <video> -t <target_lang> [options]
 | `--target-lang` | `-t` | 目标语言，可多次指定（必需） |
 | `--source-lang` | `-s` | 源语言（默认自动检测） |
 | `--output-dir` | `-o` | 输出目录（默认视频所在目录） |
+| `--asr-backend` | - | 语音识别后端：whisper, qwen3_asr（默认取配置） |
 | `--whisper-model` | - | 指定 Whisper 模型 |
 | `--translation-backend` | - | 翻译后端：ollama, openai, deepl, google（默认取配置） |
 | `--translation-model` | - | 指定翻译模型（旧名 `--ollama-model` 仍可用） |
@@ -642,6 +645,7 @@ subtitle-forge batch <directory> -t <target_lang> [options]
 | `--workers` | `-w` | 并发数（默认取配置 `max_workers`，即 2；上限 4） |
 | `--file-list` | - | 从文件列表读取 |
 | `--output-dir` | `-o` | 输出目录 |
+| `--asr-backend` | - | 语音识别后端：whisper, qwen3_asr |
 | `--whisper-model` | - | Whisper 模型 |
 | `--translation-backend` | - | 翻译后端：ollama, openai, deepl, google |
 | `--translation-model` | - | 翻译模型（旧名 `--ollama-model` 仍可用） |
@@ -682,7 +686,8 @@ subtitle-forge transcribe <video> [options]
 | `<video>` | - | 视频文件路径（必需） |
 | `--output` | `-o` | 输出文件路径 |
 | `--language` | `-l` | 源语言（默认自动检测） |
-| `--model` | `-m` | Whisper 模型 |
+| `--asr-backend` | - | 语音识别后端：whisper, qwen3_asr |
+| `--model` | `-m` | 识别模型（对当前后端生效） |
 | `--auto-model` | - | 根据 GPU 自动选择模型 |
 | `--whisperx / --no-whisperx` | - | 使用/不使用 WhisperX |
 | `--timestamp-mode` | - | 后处理模式 |
@@ -782,11 +787,21 @@ subtitle-forge config use-prompt anime
 subtitle-forge quickstart
 ```
 
-向导会自动：
-- 检测系统环境
-- 检查依赖是否安装
-- 下载必要的模型
-- 创建默认配置
+向导分六步，每一步的选择当场写进配置文件（`--config` 指定的那份，默认位置见[配置文件](#配置文件)）：
+
+1. 检查 ffmpeg。
+2. 检测显卡。没有 NVIDIA 显卡时，把所选识别后端的 `device` 设成 `cpu`（Whisper 同时设 `compute_type: int8`）。
+3. 选语音识别后端：`whisper` 或 `qwen3_asr`。选 Whisper 时按显存推荐模型（没有显卡推荐 `small`），确认后才改。
+   缺可选依赖时提示安装命令：选 Whisper 而没装 `[whisperx]`（且 `whisper.use_whisperx` 开着），
+   或选 Qwen3-ASR 而没装 `[qwen3-asr]`。
+4. 检查识别模型是否已下载，没有就问要不要现在下。
+5. 选翻译后端：
+   - `ollama`：按显存推荐翻译模型，确认后才改。
+   - `openai`：填服务地址，向导从服务端取模型列表让你按编号选；取不到就手输模型 id。
+   - `deepl` / `google`：API key 只从环境变量读，向导不往配置文件里写 key；没设时告诉你怎么设。
+6. 检查翻译服务：连得上、模型在、key 被接受。Ollama 缺模型时问要不要现在拉取。
+
+没解决的问题在最后汇总列出，修好后可以用 `subtitle-forge config check` 复查。
 
 ---
 

@@ -280,6 +280,39 @@ def test_whisper_only_flags_are_reported_and_dropped_under_another_backend(tmp_p
     assert built == [{"model_name": "Qwen/Qwen3-ASR-0.6B"}]
 
 
+def test_asr_backend_flag_selects_the_backend_and_drops_whisper_flags(tmp_path, monkeypatch):
+    _fake_components(monkeypatch)
+    built = []
+    monkeypatch.setattr(
+        asr_module,
+        "create_backend",
+        lambda config, **o: built.append((config.asr.backend, o)) or _FakeTranscriber(),
+    )
+
+    transcribed = _run(tmp_path, "transcribe", str(_video(tmp_path)), "--asr-backend", "qwen3_asr")
+    batched = _run(
+        tmp_path, "batch", str(tmp_path), "-t", "zh", "--asr-backend", "qwen3_asr",
+        "--whisper-model", "small",
+    )  # fmt: skip
+
+    assert transcribed.exit_code == 0, transcribed.output
+    assert batched.exit_code == 0, batched.output
+    assert "Whisper-only" in batched.output
+    assert [backend for backend, _ in built] == ["qwen3_asr", "qwen3_asr"]
+
+
+def test_an_unknown_asr_backend_exits_1_before_any_work(tmp_path, monkeypatch):
+    _fake_components(monkeypatch)
+    built = []
+    monkeypatch.setattr(asr_module, "create_backend", lambda config, **o: built.append(o))
+
+    result = _run(tmp_path, "process", str(_video(tmp_path)), "-t", "zh", "--asr-backend", "x")
+
+    assert result.exit_code == 1, result.output
+    assert "asr.backend must be one of" in result.output
+    assert built == []
+
+
 def test_a_degraded_transcription_says_so_and_exits_3(tmp_path, monkeypatch):
     _fake_components(monkeypatch)
     backend_degradations.append(CPU)
