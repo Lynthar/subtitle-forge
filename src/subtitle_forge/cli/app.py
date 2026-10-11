@@ -1,5 +1,7 @@
 """CLI main application."""
 
+import io
+import sys
 from pathlib import Path
 from typing import Dict, List, Mapping, Optional
 
@@ -163,11 +165,8 @@ def main(
     # with the full list of problems — surface that as a clean error instead
     # of a traceback.
     try:
-        if config_file:
-            _config_path = config_file
-            _config = AppConfig.load(config_file)
-        else:
-            _config = get_config()
+        _config_path = config_file
+        _config = AppConfig.load(config_file)
     except ValueError as e:
         console.print(f"[red]{e}[/red]")
         raise typer.Exit(1)
@@ -575,6 +574,11 @@ def version():
 
 def cli():
     """Entry point."""
+    # A pipe or file on Windows gets the ANSI code page, which cannot encode CJK text or Rich's
+    # spinner, and Rich then raises mid-run with exit 1; UTF-8 encodes everything.
+    for stream in (sys.stdout, sys.stderr):
+        if isinstance(stream, io.TextIOWrapper):
+            stream.reconfigure(encoding="utf-8", errors="replace")
     app()
 
 

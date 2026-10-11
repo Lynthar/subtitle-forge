@@ -39,8 +39,10 @@ def _active_config_path() -> Optional[Path]:
 
 
 def _load_config() -> AppConfig:
-    """Load the active config, honouring the root --config flag."""
-    return AppConfig.load(_active_config_path())
+    """The config the root callback loaded, from the root --config flag's file."""
+    from ..app import get_config
+
+    return get_config()
 
 
 def _config_file_display() -> Path:

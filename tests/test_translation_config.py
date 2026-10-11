@@ -10,6 +10,7 @@ from typer.testing import CliRunner
 from subtitle_forge.cli.app import app, apply_translation_flags
 from subtitle_forge.core import prompt_library
 from subtitle_forge.core.prompt_library import CUSTOM_TEMPLATE_ID, PromptLibrary, get_prompt_library
+from subtitle_forge.models import config as config_module
 from subtitle_forge.models.config import AppConfig
 
 runner = CliRunner()
@@ -54,6 +55,17 @@ def test_an_old_file_loads_with_its_ollama_settings_moved_and_says_so(tmp_path, 
     assert tr.prompt_template_id == "movie-scifi"
     assert "ollama.temperature" in caplog.text
     assert "config import" in caplog.text
+
+
+def test_a_config_subcommand_warns_about_an_old_file_once(tmp_path, monkeypatch):
+    path = _write(tmp_path, {"ollama": {"temperature": 0.2}})
+    warned = []
+    monkeypatch.setattr(config_module.logger, "warning", lambda msg, *a, **k: warned.append(msg))
+
+    result = runner.invoke(app, ["--config", str(path), "config", "show"])
+
+    assert result.exit_code == 0, result.output
+    assert len(warned) == 1
 
 
 def test_a_key_already_under_translation_wins_over_the_old_one(tmp_path):
