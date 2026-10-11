@@ -17,6 +17,7 @@ from subtitle_forge.core import asr as asr_module  # noqa: E402
 from subtitle_forge.core import pipeline as pipeline_module  # noqa: E402
 from subtitle_forge.core import translator as translator_module  # noqa: E402
 from subtitle_forge.core.asr import TranscriptionInfo  # noqa: E402
+from subtitle_forge.core.asr import create_backend as real_create_backend  # noqa: E402
 from subtitle_forge.core.transcriber import Transcriber  # noqa: E402
 from subtitle_forge.models.degradation import Degradation  # noqa: E402
 from subtitle_forge.models.subtitle import SubtitleSegment  # noqa: E402
@@ -147,6 +148,29 @@ def test_transcribe_passes_its_timing_flags_down(tmp_path, monkeypatch):
 
     assert result.exit_code == 0, result.output
     assert [(c.mode, c.split_sentences) for c in used] == [("full", False)]
+
+
+def test_transcribe_follows_the_configured_vad_filter_unless_a_flag_says_otherwise(
+    tmp_path, monkeypatch
+):
+    _fake_components(monkeypatch)
+    built = []
+    monkeypatch.setattr(
+        asr_module,
+        "create_backend",
+        lambda config, **o: (
+            built.append(real_create_backend(config, **o).vad_filter) or _FakeTranscriber()
+        ),
+    )
+    (tmp_path / "config.yaml").write_text("whisper:\n  vad_filter: false\n", encoding="utf-8")
+    video = str(_video(tmp_path))
+
+    plain = _run(tmp_path, "transcribe", video)
+    flagged = _run(tmp_path, "transcribe", video, "--vad-filter")
+
+    assert plain.exit_code == 0, plain.output
+    assert flagged.exit_code == 0, flagged.output
+    assert built == [False, True]
 
 
 def test_batch_writes_original_and_translation_for_every_video(tmp_path, monkeypatch):

@@ -32,6 +32,14 @@ def test_save_round_trips_and_leaves_no_temp_files(tmp_path):
     assert leftovers == []
 
 
+def test_save_rounds_times_to_the_nearest_millisecond(tmp_path):
+    out = tmp_path / "video.en.srt"
+    SubtitleProcessor().save(
+        [SubtitleSegment(index=1, start=1.92, end=59.9996, text="Hello there")], out
+    )
+    assert "00:00:01,920 --> 00:01:00,000" in out.read_text(encoding="utf-8")
+
+
 def test_save_replaces_existing_file(tmp_path):
     out = tmp_path / "video.zh.srt"
     processor = SubtitleProcessor()

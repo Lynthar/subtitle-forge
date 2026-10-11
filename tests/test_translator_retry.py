@@ -12,6 +12,7 @@ Fake chat backend only — no live server needed.
 """
 
 import json
+import logging
 
 import httpx
 import pytest
@@ -115,20 +116,24 @@ def test_unhealed_segment_keeps_its_failure_record():
     assert [f["index"] for f in translator.get_failed_translations()] == [2]
 
 
-def test_a_segment_the_model_never_answered_is_reported_as_untranslated():
+def test_a_segment_the_model_never_answered_is_reported_as_untranslated(caplog):
     translator, _ = _translator([_good({"1": "你好"}), "Bye"])
-    translator.translate(_segs("Hello", "Bye"), "en", "zh")
+    with caplog.at_level(logging.WARNING):
+        translator.translate(_segs("Hello", "Bye"), "en", "zh")
 
     degradation = translator.untranslated_degradation("zh", 2)
 
     assert degradation is not None
     assert degradation.code == "translation_incomplete"
     assert degradation.message.startswith("zh: 1 of 2")
+    assert "1 left untranslated" in caplog.text
 
 
-def test_an_answer_identical_to_the_source_is_not_reported():
+def test_an_answer_identical_to_the_source_is_not_reported(caplog):
     # A name translates to itself; the individual retry agrees, so nothing is missing.
     translator, _ = _translator([_good({"1": "你好", "2": "Tokyo"}), "Tokyo"])
-    translator.translate(_segs("Hello", "Tokyo"), "en", "zh")
+    with caplog.at_level(logging.WARNING):
+        translator.translate(_segs("Hello", "Tokyo"), "en", "zh")
 
     assert translator.untranslated_degradation("zh", 2) is None
+    assert [r.getMessage() for r in caplog.records if r.levelno >= logging.WARNING] == []

@@ -29,10 +29,10 @@ def transcribe_video(
         "-m",
         help="Speech recognition model name (for the configured asr.backend)",
     ),
-    vad_filter: bool = typer.Option(
-        True,
+    vad_filter: Optional[bool] = typer.Option(
+        None,
         "--vad-filter/--no-vad-filter",
-        help="Enable VAD filtering",
+        help="Enable VAD filtering (default: config whisper.vad_filter)",
     ),
     batch_size: Optional[int] = typer.Option(
         None,
@@ -116,6 +116,7 @@ def transcribe_video(
     whisper_flags = {
         "--auto-model": auto_model,
         "--batch-size": batch_size,
+        "--vad-filter/--no-vad-filter": vad_filter,
         "--whisperx/--no-whisperx": use_whisperx,
     }
     backend_overrides: Dict[str, object] = {}
@@ -135,7 +136,8 @@ def transcribe_video(
                 )
             backend_overrides["model_name"] = selected
             print_info(f"Auto-selected model: {selected}")
-        backend_overrides["vad_filter"] = vad_filter
+        if vad_filter is not None:
+            backend_overrides["vad_filter"] = vad_filter
         if use_whisperx is not None:
             backend_overrides["use_whisperx"] = use_whisperx
         if batch_size is not None:

@@ -688,6 +688,7 @@ subtitle-forge transcribe <video> [options]
 | `--language` | `-l` | 源语言（默认自动检测） |
 | `--asr-backend` | - | 语音识别后端：whisper, qwen3_asr |
 | `--model` | `-m` | 识别模型（对当前后端生效） |
+| `--vad-filter / --no-vad-filter` | - | 开/关 VAD 过滤（默认取配置 `whisper.vad_filter`） |
 | `--auto-model` | - | 根据 GPU 自动选择模型 |
 | `--whisperx / --no-whisperx` | - | 使用/不使用 WhisperX |
 | `--timestamp-mode` | - | 后处理模式 |

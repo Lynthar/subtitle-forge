@@ -2,7 +2,6 @@
 
 from pathlib import Path
 from typing import Iterable, List, Optional
-from datetime import timedelta
 import codecs
 import logging
 import os
@@ -60,18 +59,9 @@ class SubtitleProcessor:
 
     @staticmethod
     def seconds_to_time(seconds: float) -> pysrt.SubRipTime:
-        """Convert seconds to SRT time format."""
-        td = timedelta(seconds=seconds)
-        hours, remainder = divmod(td.total_seconds(), 3600)
-        minutes, secs = divmod(remainder, 60)
-        milliseconds = int((secs - int(secs)) * 1000)
-
-        return pysrt.SubRipTime(
-            hours=int(hours),
-            minutes=int(minutes),
-            seconds=int(secs),
-            milliseconds=milliseconds,
-        )
+        """Convert seconds to SRT time, rounded to the nearest millisecond."""
+        # Round the total, not the fraction: 59.9996 s must carry into the next second.
+        return pysrt.SubRipTime.from_ordinal(round(seconds * 1000))
 
     @staticmethod
     def time_to_seconds(time: pysrt.SubRipTime) -> float:

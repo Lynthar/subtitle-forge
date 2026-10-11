@@ -703,19 +703,17 @@ FOLLOWING DIALOGUE (for context, DO NOT translate):
             if progress_callback:
                 progress_callback(len(translated_segments), len(segments))
 
-        # Count and report failures
-        failed_count = sum(
-            1 for orig, trans in zip(segments, translated_segments) if orig.text == trans.text
-        )
-
+        # The count untranslated_degradation reports: an answer identical to the source (a name,
+        # a number) survived its own retry, so it is a translation, not a failure.
+        failed_count = len(self._failed_translations)
         if failed_count > 0:
             logger.warning(
                 f"Translation complete: {len(translated_segments)} segments, "
-                f"{failed_count} failed ({failed_count * 100 // len(segments)}%)"
+                f"{failed_count} left untranslated ({failed_count * 100 // len(segments)}%)"
             )
 
             # Save failed translations log if enabled
-            if self.save_failed_log and self._failed_translations:
+            if self.save_failed_log:
                 self._save_failed_log()
         else:
             logger.info(f"Translation complete: {len(translated_segments)} segments")
